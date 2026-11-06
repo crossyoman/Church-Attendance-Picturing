@@ -177,15 +177,64 @@ const App = {
   /* ---------- 5. 오늘 처음 왔어요 ---------- */
   newMember(unit, company) {
     const label = company ? `${unit} · ${company}` : unit;
+    const nowY = new Date().getFullYear();
+    const years = [nowY, nowY + 1, nowY + 2, nowY + 3, nowY + 4];
     this.set('new', `${this.topbar(`${esc(label)} · 처음 오셨군요! 환영합니다`)}
       <form class="form-card" id="new-form" autocomplete="off">
         <label>이름<input id="nm" type="text" maxlength="10" placeholder="예) 홍길동" required></label>
-        <label>전역일<input id="dc" type="date" required></label>
-        <p class="hint">전역일은 같은 이름의 형제를 구분하는 데 사용돼요.</p>
+        <label>전역일
+          <div class="date-combo">
+            <div class="date-selects">
+              <select id="dc-y" title="전역 연도">
+                <option value="">연도</option>
+                ${years.map(y => `<option value="${y}">${y}년</option>`).join('')}
+              </select>
+              <select id="dc-m" title="전역 월">
+                <option value="">월</option>
+                ${Array.from({ length: 12 }, (_, i) => i + 1).map(m => `<option value="${pad(m)}">${m}월</option>`).join('')}
+              </select>
+              <select id="dc-d" title="전역 일">
+                <option value="">일</option>
+                ${Array.from({ length: 31 }, (_, i) => i + 1).map(d => `<option value="${pad(d)}">${d}일</option>`).join('')}
+              </select>
+            </div>
+            <div class="date-cal-wrap">
+              <span>📅 달력으로 선택:</span>
+              <input id="dc" type="date" required>
+            </div>
+          </div>
+        </label>
+        <p class="hint">위의 연/월/일 스크롤 선택 또는 달력에서 전역일을 편하게 고를 수 있어요.</p>
         <button class="btn primary xl" type="submit">다음 (사진 촬영) →</button>
       </form>`);
     this.bindNav(() => this.names(unit, company, 'normal'));
-    $('#dc').min = todayStr();
+
+    const dc = $('#dc'), dcy = $('#dc-y'), dcm = $('#dc-m'), dcd = $('#dc-d');
+    dc.min = todayStr();
+
+    const syncFromSelects = () => {
+      const y = dcy.value, m = dcm.value, d = dcd.value;
+      if (y && m && d) {
+        const maxD = new Date(Number(y), Number(m), 0).getDate();
+        const adjD = Math.min(Number(d), maxD);
+        if (Number(d) !== adjD) dcd.value = pad(adjD);
+        dc.value = `${y}-${m}-${pad(adjD)}`;
+      }
+    };
+
+    const syncFromCal = () => {
+      if (!dc.value) return;
+      const [y, m, d] = dc.value.split('-');
+      dcy.value = y;
+      dcm.value = m;
+      dcd.value = d;
+    };
+
+    dcy.onchange = syncFromSelects;
+    dcm.onchange = syncFromSelects;
+    dcd.onchange = syncFromSelects;
+    dc.onchange = syncFromCal;
+
     setTimeout(() => $('#nm') && $('#nm').focus(), 200);
 
     $('#new-form').onsubmit = async e => {
@@ -224,15 +273,16 @@ const App = {
    */
   async camera(ctx) {
     const who = ctx.retake ? ctx.retake.member : (ctx.member || ctx.pending);
-    this.set('camera', `${this.topbar(`${esc(who.name)} 형제님, 얼굴 사진을 찍어 주세요`)}
+    this.set('camera', `${this.topbar(`${esc(who.name)} 형제님, 얼굴과 이름표를 함께 찍어 주세요`)}
       <div class="cam-wrap">
         <video id="video" playsinline muted autoplay></video>
         <div class="face-guide" id="guide"></div>
+        <div class="nametag-guide">🏷️ 이름표 위치<br>(오른쪽 가슴)</div>
         <div class="countdown" id="cd"></div>
         <div class="flash" id="flash"></div>
       </div>
       <div class="cam-actions" id="actions"></div>
-      <p class="hint center" id="cam-hint">얼굴이 가운데 원 안에 오도록 하고 ‘촬영하기’를 눌러 주세요</p>`);
+      <p class="hint center" id="cam-hint">얼굴과 오른쪽 가슴의 이름표가 모두 보이도록 서서 ‘촬영하기’를 눌러 주세요</p>`);
     // 다시 찍기 중 '뒤로'를 누르면 기존 사진을 유지한 채 첫 화면으로
     this.bindNav(ctx.retake ? () => this.home() : ctx.back);
 
@@ -254,11 +304,11 @@ const App = {
       const fl = $('#flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
 
       const shotAt = new Date();
-      // 워터마크: 2번째 줄이 요청하신 "yyyy-mm-dd hh:mm 이름"
+      // 워터마크: 이름표를 가리지 않도록 전역일은 빼고 우측에 배치
       const lines = [
-        `${CONFIG.churchName} 예배 출석 인증`,
+        `${CONFIG.churchName} 예배 출석`,
         `${fmtDate(shotAt)} ${fmtTime(shotAt)} ${who.name}`,
-        `${unitLabel(who)} · 전역 ${dotDate(who.dischargeDate)}`,
+        unitLabel(who),
       ];
       const blob = await Camera.toBlob(Camera.capture(video, lines));
       Camera.stop();

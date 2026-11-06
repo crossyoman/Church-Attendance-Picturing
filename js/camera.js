@@ -6,8 +6,13 @@ const Camera = {
 
   async start(video) {
     this.stop();
+    // 세로 상반신(얼굴+어깨+이름표) 촬영을 위해 세로 3:4 지향
     this.stream = await navigator.mediaDevices.getUserMedia({
-      video: { facingMode: 'user', width: { ideal: 1280 }, height: { ideal: 960 } },
+      video: {
+        facingMode: 'user',
+        width: { ideal: 960 },
+        height: { ideal: 1280 }
+      },
       audio: false,
     });
     video.srcObject = this.stream;
@@ -18,31 +23,87 @@ const Camera = {
     if (this.stream) { this.stream.getTracks().forEach(t => t.stop()); this.stream = null; }
   },
 
-  /** 현재 화면을 캡처하고 워터마크를 새깁니다 */
+  /**
+   * 화면에 보이는 세로 3:4 비율에 맞춰 비디오 중심부를 캡처하고 워터마크를 새깁니다
+   */
   capture(video, lines) {
-    const vw = video.videoWidth, vh = video.videoHeight;
-    const scale = Math.min(1, CONFIG.photoMaxSide / Math.max(vw, vh));
-    const w = Math.round(vw * scale), h = Math.round(vh * scale);
+    const vw = video.videoWidth || 960, vh = video.videoHeight || 1280;
+    // 목표 세로 비율 3:4 (가로:세로 = 3:4)
+    const targetAspect = 3 / 4;
+    let sx = 0, sy = 0, sw = vw, sh = vh;
+    if (vw / vh > targetAspect) {
+      // 비디오가 더 가로로 긴 경우 (좌우 잘라내기)
+      sw = Math.round(vh * targetAspect);
+      sx = Math.round((vw - sw) / 2);
+    } else {
+      // 비디오가 더 세로로 긴 경우 (상하 잘라내기)
+      sh = Math.round(vw / targetAspect);
+      sy = Math.round((vh - sh) / 2);
+    }
+
+    // 최종 사진 크기 (긴 변 최대 photoMaxSide 에 맞춤)
+    const maxSide = CONFIG.photoMaxSide || 1280;
+    const h = Math.min(maxSide, sh);
+    const w = Math.round(h * targetAspect);
+
     const c = document.createElement('canvas');
     c.width = w; c.height = h;
     const ctx = c.getContext('2d');
-    ctx.drawImage(video, 0, 0, w, h);
+    // 비디오에서 중심부 3:4 영역을 추출해 캔버스에 꽉 차게 그림
+    ctx.drawImage(video, sx, sy, sw, sh, 0, 0, w, h);
     this.watermark(ctx, w, h, lines);
     return c;
   },
 
+  /**
+   * 이름표를 가리지 않도록 사진 우측 하단에 우측 정렬로 콤팩트하게 배치
+   */
   watermark(ctx, w, h, lines) {
-    const fs = Math.max(14, Math.round(Math.min(w, h) * 0.045));
-    const lh = fs * 1.35, padd = fs * 0.6;
-    const boxH = lines.length * lh + padd * 2;
-    ctx.fillStyle = 'rgba(0,0,0,0.55)';
-    ctx.fillRect(0, h - boxH, w, boxH);
-    ctx.textBaseline = 'top';
+    const fs = Math.max(14, Math.round(Math.min(w, h) * 0.038));
+    const lh = fs * 1.35;
+    const padX = fs * 0.8, padY = fs * 0.6;
+    ctx.font = `bold ${fs}px sans-serif`;
+
+    // 텍스트 중 가장 긴 가로폭 계산
+    let maxTextW = 0;
     lines.forEach((l, i) => {
-      ctx.font = `${i === 0 ? '' : 'bold '}${i === 0 ? Math.round(fs * 0.8) : fs}px sans-serif`;
-      ctx.fillStyle = i === 0 ? '#ffd76a' : '#ffffff';
-      ctx.fillText(l, padd, h - boxH + padd + i * lh);
+      ctx.font = `${i === 0 ? '' : 'bold '}${i === 0 ? Math.round(fs * 0.85) : fs}px sans-serif`;
+      const tw = ctx.measureText(l).width;
+      if (tw > maxTextW) maxTextW = tw;
     });
+
+    const boxW = Math.min(w * 0.65, maxTextW + padX * 2);
+    const boxH = lines.length * lh + padY * 2;
+    const boxX = w - boxW - padX;
+    const boxY = h - boxH - padY;
+
+    // 우측 하단 둥근 반투명 박스 (이름표가 있는 왼쪽/중앙 가슴 영역을 침범하지 않음)
+    ctx.save();
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
+    const rad = 10;
+    ctx.beginPath();
+    ctx.moveTo(boxX + rad, boxY);
+    ctx.lineTo(boxX + boxW - rad, boxY);
+    ctx.quadraticCurveTo(boxX + boxW, boxY, boxX + boxW, boxY + rad);
+    ctx.lineTo(boxX + boxW, boxY + boxH - rad);
+    ctx.quadraticCurveTo(boxX + boxW, boxY + boxH, boxX + boxW - rad, boxY + boxH);
+    ctx.lineTo(boxX + rad, boxY + boxH);
+    ctx.quadraticCurveTo(boxX, boxY + boxH, boxX, boxY + boxH - rad);
+    ctx.lineTo(boxX, boxY + rad);
+    ctx.quadraticCurveTo(boxX, boxY, boxX + rad, boxY);
+    ctx.closePath();
+    ctx.fill();
+
+    // 우측 정렬 텍스트 렌더링
+    ctx.textAlign = 'right';
+    ctx.textBaseline = 'top';
+    const textRightX = boxX + boxW - padX;
+    lines.forEach((l, i) => {
+      ctx.font = `${i === 0 ? '' : 'bold '}${i === 0 ? Math.round(fs * 0.85) : fs}px sans-serif`;
+      ctx.fillStyle = i === 0 ? '#ffd76a' : '#ffffff';
+      ctx.fillText(l, textRightX, boxY + padY + i * lh);
+    });
+    ctx.restore();
   },
 
   /** 약 500KB 이하가 되도록 JPEG 품질을 조절 */
