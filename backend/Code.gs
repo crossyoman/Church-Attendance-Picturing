@@ -304,12 +304,7 @@ function getOrCreateDb() {
     try { ss = SpreadsheetApp.openById(ssId); } catch (e) { ss = null; }
   }
   if (!ss) {
-    const files = DriveApp.getFilesByName(APP_CONFIG.dbFileName);
-    if (files.hasNext()) {
-      ss = SpreadsheetApp.open(files.next());
-    } else {
-      ss = SpreadsheetApp.create(APP_CONFIG.dbFileName);
-    }
+    ss = SpreadsheetApp.create(APP_CONFIG.dbFileName);
     props.setProperty('DB_SPREADSHEET_ID', ss.getId());
   }
 
@@ -344,8 +339,7 @@ function getOrCreatePhotoFolder() {
   if (folderId) {
     try { return DriveApp.getFolderById(folderId); } catch (e) {}
   }
-  const it = DriveApp.getFoldersByName(APP_CONFIG.photoFolderName);
-  const folder = it.hasNext() ? it.next() : DriveApp.createFolder(APP_CONFIG.photoFolderName);
+  const folder = DriveApp.createFolder(APP_CONFIG.photoFolderName);
   props.setProperty('PHOTO_FOLDER_ID', folder.getId());
   return folder;
 }
@@ -515,15 +509,7 @@ function getPhotoBlobByAtt(att) {
       }
     } catch (e) {}
   }
-  try {
-    const folder = getOrCreatePhotoFolder();
-    const targetName = safeFileName(att.fileName) + '.jpg';
-    const files = folder.getFilesByName(targetName);
-    if (files.hasNext()) {
-      const f = files.next();
-      return f.getBlob().setName(targetName);
-    }
-  } catch (e) {}
+  // photoFileId가 있으면 정상 반환, 없으면 null
   return null;
 }
 
