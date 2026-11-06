@@ -759,7 +759,7 @@ function sendWarningEmailInternal(w, inlinePhotos) {
     if (blob) attachments.push(blob);
   });
 
-  GmailApp.sendEmail(to, subject, plainBody, {
+  MailApp.sendEmail(to, subject, plainBody, {
     name: `${APP_CONFIG.churchName} 출석체크`,
     htmlBody: htmlBody,
     attachments: attachments,
@@ -1075,14 +1075,14 @@ function sendWeeklyReportEmail(cutoffDate, achieverOnlyKey, isManualTrigger) {
   if (totalBytes <= MAX_EMAIL_BYTES) {
     const allBlobs = [];
     groups.forEach(g => g.blobs.forEach(b => allBlobs.push(b)));
-    GmailApp.sendEmail(to, baseSubject, plainBody, {
+    MailApp.sendEmail(to, baseSubject, plainBody, {
       name: `${APP_CONFIG.churchName} 출석체크`,
       htmlBody: htmlBody,
       attachments: allBlobs,
     });
     emailsSent = 1;
   } else {
-    GmailApp.sendEmail(to, baseSubject, plainBody + '\n\n※ 첨부 사진 용량이 커서 달성자별 인증 사진 메일을 이어서 발송합니다.', {
+    MailApp.sendEmail(to, baseSubject, plainBody + '\n\n※ 첨부 사진 용량이 커서 달성자별 인증 사진 메일을 이어서 발송합니다.', {
       name: `${APP_CONFIG.churchName} 출석체크`,
       htmlBody: htmlBody,
     });
@@ -1092,7 +1092,7 @@ function sendWeeklyReportEmail(cutoffDate, achieverOnlyKey, isManualTrigger) {
       const p = g.achiever.person;
       const sub = `${baseSubject} - 인증사진 (${unitLabel(p)} ${p.name} ${g.achiever.milestone}회차)`;
       const singleReport = Object.assign({}, r, { achievers: [g.achiever] });
-      GmailApp.sendEmail(to, sub, formatReportPlainText(singleReport), {
+      MailApp.sendEmail(to, sub, formatReportPlainText(singleReport), {
         name: `${APP_CONFIG.churchName} 출석체크`,
         htmlBody: formatReportHtml(singleReport),
         attachments: g.blobs,
