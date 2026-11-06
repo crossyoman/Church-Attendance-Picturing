@@ -12,7 +12,7 @@
 ## 2. 폴더 및 파일 구조
 - `index.html`, `manifest.json`, `sw.js`, `icon.svg`
 - `css/style.css`: 키오스크 및 관리자 스타일
-- `js/config.js`: 11개 소속 부대 편성(`본부근무대`, `정보통신대`, `단본부`, `단통신`, `8급양대`, `18보급대대`, `608본부`, `608중형`, `608버스`, `608대형`, `78정비대대` — 중대 2차 질문 없이 1차 선택으로 바로 진입), 기본 비밀번호(`0113`), 이메일, 기본 백엔드 URL(`defaultApiUrl`), 기준값 설정
+- `js/config.js`: 11개 소속 부대 편성(`본부근무대`, `정보통신대`, `단본부`, `단통신`, `8급양대`, `18보급대대`, `608본부`, `608중형`, `608버스`, `608대형`, `78정비대대` — 중대 2차 질문 없이 1차 선택으로 바로 진입), 기본 관리자/백엔드 비밀번호, 이메일, 기본 백엔드 URL(`defaultApiUrl`), 기준값 설정
 - `js/db.js`: IndexedDB 래퍼 (`members`, `attendance`, `photos`, `mileage`, `discharged`, `warnings`, `settings`, `syncQueue`)
 - `js/store.js`: 데이터 CRUD 계층 (로컬 IndexedDB 저장 + `Backend.enqueue` 자동 호출 + 서버 사진 지연 로딩 캐시)
 - `js/api.js`: Google Apps Script 웹앱 통신, 오프라인 동기화 큐(`syncQueue`), 서버 전체 업로드/복원, 즉시 메일 발송 API

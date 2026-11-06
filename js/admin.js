@@ -536,14 +536,14 @@ const Admin = {
     try { const est = await navigator.storage.estimate(); usage = `${(est.usage / 1048576).toFixed(1)}MB 사용 중 (사용 가능 약 ${(est.quota / 1073741824).toFixed(1)}GB)`; } catch (e) { }
     body.innerHTML = `
       <div class="card"><h3>☁️ 백엔드 서버 연동 (Google 계정 통합 · 자동 메일 · 데스크탑 동기화)</h3>
-        <p class="hint"><code>cgchurch@gmail.com</code> 계정의 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호(초기 0113)</b>를 입력해 연결합니다.<br>
+        <p class="hint"><code>cgchurch@gmail.com</code> 계정의 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호</b>를 입력해 연결합니다.<br>
           봉사자가 노트북에서 <code>cgchurch@gmail.com</code> 메일에 접속하더라도 백엔드 비밀번호 없이는 백엔드 서버나 설정에 접근할 수 없으며, 비밀번호는 구글 시트에 노출되지 않고 보안 영역에만 저장됩니다.</p>
         <form class="mform" id="bf" style="margin-top:.6rem">
           <label>Google Apps Script 웹앱 URL
             <input type="url" id="bf-url" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(apiUrl)}">
           </label>
-          <label>백엔드 서버 비밀번호 (초기 0113)
-            <input type="password" id="bf-pw" inputmode="numeric" maxlength="8" placeholder="백엔드 비밀번호 입력 (초기 0113)" value="${esc(Backend.sessionBackendPw || '')}">
+          <label>백엔드 서버 비밀번호
+            <input type="password" id="bf-pw" inputmode="numeric" maxlength="8" placeholder="백엔드 비밀번호 입력" value="${esc(Backend.sessionBackendPw || '')}">
           </label>
           <div class="row">
             <button class="btn primary" type="submit" id="bf-save">🔌 서버 연결 및 일요일 13:00 자동발송 켜기</button>
@@ -557,10 +557,10 @@ const Admin = {
           <button class="btn ghost small" id="cloud-pull" ${apiUrl ? '' : 'disabled'}>☁️↓ 서버 데이터 → 이 기기로 전체 복원 (데스크탑/새 기기 동기화)</button>
         </div>
       </div>
-      <div class="card"><h3>🔐 백엔드 서버 비밀번호 변경 (초기 0113)</h3>
+      <div class="card"><h3>🔐 백엔드 서버 비밀번호 변경</h3>
         <p class="hint">백엔드 서버(웹 콘솔 및 서버 관리 작업)에 들어갈 때 사용하는 비밀번호입니다. 교회 데스크탑에서 작업하실 때와 후임 군종목사님 인계 시 원하는 번호로 변경하실 수 있습니다.</p>
         <form class="mform" id="bpf" style="margin-top:.5rem">
-          <label>현재 백엔드 비밀번호 <input type="password" id="bpf-cur" inputmode="numeric" maxlength="8" placeholder="현재 백엔드 비밀번호 (초기 0113)" required></label>
+          <label>현재 백엔드 비밀번호 <input type="password" id="bpf-cur" inputmode="numeric" maxlength="8" placeholder="현재 백엔드 비밀번호" required></label>
           <div class="two">
             <label>새 백엔드 비밀번호 (숫자 4~8자리) <input type="password" id="bpf-1" inputmode="numeric" maxlength="8" pattern="\\d{4,8}" required></label>
             <label>새 백엔드 비밀번호 확인 <input type="password" id="bpf-2" inputmode="numeric" maxlength="8" pattern="\\d{4,8}" required></label>
@@ -573,7 +573,7 @@ const Admin = {
           <label>리포트 받는 이메일 <input type="email" id="ef-a" value="${esc(s.adminEmail)}" required></label>
           <label>리포트 보내는 이메일 (공기계 계정) <input type="email" id="ef-s" value="${esc(s.senderEmail)}" required></label>
           <button class="btn primary">저장</button></form></div>
-      <div class="card"><h3>🔑 화면 잠금 비밀번호 변경 (목사님 전용 입장용 · 초기 0113)</h3>
+      <div class="card"><h3>🔑 화면 잠금 비밀번호 변경 (목사님 전용 입장용)</h3>
         <form class="mform" id="pf">
           <div class="two"><label>새 비밀번호 (숫자 4자리) <input id="pf-1" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></label>
           <label>한 번 더 <input id="pf-2" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></label></div>
@@ -597,7 +597,7 @@ const Admin = {
       if (!box) return;
       if (!st) {
         box.innerHTML = apiUrl
-          ? `<p class="muted">🔒 백엔드 상세 상태(구글 시트/사진 폴더 링크 등)를 보려면 백엔드 비밀번호(초기 0113)를 입력하고 <b>‘🔓 백엔드 상태 확인’</b>을 눌러 주세요.</p>`
+          ? `<p class="muted">🔒 백엔드 상세 상태(구글 시트/사진 폴더 링크 등)를 보려면 백엔드 비밀번호를 입력하고 <b>‘🔓 백엔드 상태 확인’</b>을 눌러 주세요.</p>`
           : `<p class="muted">아직 연결된 백엔드 서버가 없습니다. (<code>백엔드_연동_안내.md</code>를 참고해 5분 만에 무료로 만들 수 있어요)</p>`;
         return;
       }
@@ -648,7 +648,7 @@ const Admin = {
         await Modal.alert('백엔드 서버 연결을 해제했습니다.');
         return this.render();
       }
-      if (!pw) return Modal.alert('백엔드 서버 비밀번호(초기 0113)를 입력해 주세요.');
+      if (!pw) return Modal.alert('백엔드 서버 비밀번호를 입력해 주세요.');
       const btn = $('#bf-save');
       btn.disabled = true; btn.textContent = '연결 및 트리거 설정 중…';
       try {

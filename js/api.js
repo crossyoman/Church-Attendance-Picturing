@@ -1,7 +1,7 @@
 /* =========================================================
  * 백엔드 연동 및 오프라인 동기화 큐 (Google Apps Script 웹앱)
  * - 키오스크(예배당 공기계) ↔ 백엔드(Google Sheets/Drive) ↔ 교회 데스크탑 실시간 동기화
- * - 백엔드 관리 작업 시 별도 백엔드 비밀번호(초기 0113, 변경 가능) 인증 지원
+ * - 백엔드 관리 작업 시 별도 백엔드 비밀번호(변경 가능) 인증 지원
  * ========================================================= */
 const Backend = {
   flushing: false,
@@ -43,15 +43,15 @@ const Backend = {
   },
 
   /**
-   * 백엔드 비밀번호 입력 모달 (초기값 0113)
+   * 백엔드 비밀번호 입력 모달
    */
   promptBackendPassword(title = '🔐 백엔드 서버 비밀번호 확인') {
     return new Promise(resolve => {
       const w = Modal.open(`
         <h3>${title}</h3>
-        <p class="modal-msg small">백엔드 서버 보호를 위해 백엔드 비밀번호(초기 <b>0113</b>)를 입력해 주세요.</p>
+        <p class="modal-msg small">백엔드 서버 보호를 위해 백엔드 비밀번호를 입력해 주세요.</p>
         <form class="mform" id="bpw-form" style="margin-top:.8rem">
-          <input type="password" id="bpw-in" inputmode="numeric" maxlength="8" placeholder="백엔드 비밀번호 (초기 0113)" required style="text-align:center;font-size:1.3rem;letter-spacing:.2em">
+          <input type="password" id="bpw-in" inputmode="numeric" maxlength="8" placeholder="백엔드 비밀번호" required style="text-align:center;font-size:1.3rem;letter-spacing:.2em">
           <div class="modal-actions">
             <button type="button" class="btn ghost" id="bpw-cancel">취소</button>
             <button type="submit" class="btn primary">확인</button>
