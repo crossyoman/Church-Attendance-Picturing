@@ -1,0 +1,15 @@
+# 임시 파일 및 캐시
+__pycache__/
+*.py[cod]
+*$py.class
+.DS_Store
+Thumbs.db
+
+# 로컬 개발 및 임시 백업
+*.tmp
+*.log
+_smoketest.html
+
+# IDE
+.vscode/
+.idea/

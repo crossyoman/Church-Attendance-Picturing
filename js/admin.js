@@ -1,0 +1,778 @@
+/* =========================================================
+ * 목사님 전용 관리 화면
+ * ========================================================= */
+const Admin = {
+  tab: 'report',
+  urls: [],
+  reportCut: null,
+  TABS: [
+    ['report', '📊 주간 리포트'],
+    ['warnings', '⚠️ 경고'],
+    ['members', '👥 형제 관리'],
+    ['manual', '✍️ 수동 출석'],
+    ['mileage', '🎖 마일리지'],
+    ['import', '📥 엑셀 등록'],
+    ['discharged', '🗂 전역자'],
+    ['settings', '⚙️ 설정'],
+  ],
+
+  async open(tab) {
+    if (typeof Backend !== 'undefined' && !tab) {
+      try { await Backend.syncFromServerIfChanged(); } catch (e) { }
+    }
+    if (!tab) tab = (await Store.warnings()).some(w => !w.resolved) ? 'warnings' : 'report';
+    this.tab = tab; this.render();
+  },
+
+  async render() {
+    this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
+    const open = (await Store.warnings()).filter(w => !w.resolved).length;
+    const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
+    const pending = isConn ? await Backend.pendingCount() : 0;
+    const syncBadge = isConn
+      ? `<span class="badge" style="background:${pending ? 'var(--gold);color:#3b2a07' : 'var(--green)'};font-size:.75rem;cursor:pointer" id="adm-sync-badge">${pending ? `☁️ 동기화 대기 ${pending}건` : '☁️ 서버 연결됨'}</span>`
+      : `<span class="badge gray" style="font-size:.75rem;cursor:pointer" id="adm-sync-badge">☁️ 서버 미연결</span>`;
+    App.set('admin', `<div class="admin">
+      <header class="admin-head"><h2>목사님 전용 ${syncBadge}</h2>
+        <div class="row" style="margin:0">
+          ${isConn ? '<button class="btn ghost small" id="adm-sync-now">🔄 서버 동기화</button>' : ''}
+          <button class="btn ghost" id="adm-exit">🔒 잠그고 나가기</button>
+        </div>
+      </header>
+      <nav class="tabs">${this.TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === this.tab ? 'on' : ''}">${l}${k === 'warnings' && open ? ` <span class="badge" style="background:var(--red)">${open}</span>` : ''}</button>`).join('')}</nav>
+      <section class="adm-body" id="body"><p class="muted">불러오는 중…</p></section></div>`);
+    $('#adm-exit').onclick = () => { if (typeof Backend !== 'undefined') Backend.lockSession(); App.home(); };
+    $('#adm-sync-badge').onclick = () => this.open('settings');
+    const syncBtn = $('#adm-sync-now');
+    if (syncBtn) syncBtn.onclick = async () => {
+      syncBtn.disabled = true; syncBtn.textContent = '동기화 중…';
+      await Backend.syncFromServerIfChanged(true);
+      this.render();
+    };
+    $$('.tabs button').forEach(b => b.onclick = () => this.open(b.dataset.tab));
+    try { await this['tab_' + this.tab]($('#body')); }
+    catch (e) { console.error(e); $('#body').innerHTML = `<p class="err">오류: ${esc(e.message)}</p>`; }
+  },
+
+  thumbURL(blob) { const u = URL.createObjectURL(blob); this.urls.push(u); return u; },
+
+  unitSelect(id, withAll = false, value = '') {
+    const opts = allUnitLabels().map(u => {
+      const v = `${u.unit}|${u.company || ''}`;
+      return `<option value="${esc(v)}" ${v === value ? 'selected' : ''}>${esc(u.label)}</option>`;
+    }).join('');
+    return `<select id="${id}">${withAll ? '<option value="">전체 부대</option>' : '<option value="">부대 선택</option>'}${opts}</select>`;
+  },
+  parseUnit(v) { const [unit, company] = v.split('|'); return { unit, company: company || null }; },
+
+  showPhoto(url, caption) {
+    const w = Modal.open(`<img class="big-photo" src="${url}"><p class="modal-msg small">${esc(caption)}</p>
+      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'wide');
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+  },
+
+  /** 출석 기록 썸네일 HTML 채우기 */
+  async fillThumbs(container, atts) {
+    const parts = [];
+    for (const a of atts) {
+      if (a.hasPhoto) {
+        const b = await Store.getPhoto(a.id);
+        if (b) { parts.push(`<figure data-url="${this.thumbURL(b)}" data-cap="${esc(a.fileName)}"><img src="${this.urls[this.urls.length - 1]}"><figcaption>${esc(a.fileName)}</figcaption></figure>`); continue; }
+      }
+      parts.push(`<figure class="nophoto"><div>${a.manual ? '수동 보정<br>' + esc(a.reason || '') : '사진 없음'}</div><figcaption>${esc(a.fileName)}</figcaption></figure>`);
+    }
+    container.innerHTML = parts.join('');
+    $$('figure[data-url]', container).forEach(f => f.onclick = () => this.showPhoto(f.dataset.url, f.dataset.cap));
+  },
+
+  /* ===================== 주간 리포트 ===================== */
+  async tab_report(body) {
+    const cuts = Report.recentCutoffs(12);
+    const sel = this.reportCut || String(cuts[0].getTime());
+    const s = await Store.settings();
+    const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
+    body.innerHTML = `
+      <div class="toolbar">
+        <label>기준: <select id="cut">
+          ${cuts.map(c => `<option value="${c.getTime()}" ${String(c.getTime()) === sel ? 'selected' : ''}>${fmtDate(c)} (일) 13:00</option>`).join('')}
+          <option value="now" ${sel === 'now' ? 'selected' : ''}>지금 시점 (미리보기)</option>
+        </select></label>
+        <button class="btn primary" id="server-send-all">🚀 서버에서 즉시 메일 발송</button>
+        <button class="btn ghost" id="share-all">📧 기기 메일 앱으로 보내기</button>
+        <button class="btn ghost" id="copy">📋 본문 복사</button>
+      </div>
+      <div class="note">${isConn
+        ? `✅ <b>백엔드 서버 연결됨</b>: 매주 일요일 13:00에 <b>${esc(s.senderEmail)}</b>에서 <b>${esc(s.adminEmail)}</b>으로 주간 리포트 + 24회 인증 사진(개별 첨부)이 자동 발송됩니다.<br>지금 바로 발송하려면 <b>‘🚀 서버에서 즉시 메일 발송’</b>을 눌러 주세요.`
+        : `⚠️ 아직 백엔드 서버 URL이 입력되지 않았습니다. <b>⚙️ 설정</b> 탭에서 Google Apps Script 웹앱 주소를 입력하면 매주 일요일 13:00 자동 메일 발송이 활성화됩니다.<br>지금은 ‘기기 메일 앱으로 보내기’로 공기계의 Gmail(${esc(s.senderEmail)})에서 보낼 수 있어요.`}</div>
+      <div id="rep"><p class="muted">계산 중…</p></div>`;
+    $('#cut').onchange = e => { this.reportCut = e.target.value; this.render(); };
+
+    const cut = sel === 'now' ? new Date() : new Date(+sel);
+    const r = await Report.build(cut);
+    const text = Report.text(r);
+    const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 (${fmtDate(cut)})`;
+
+    $('#rep').innerHTML = `
+      <h3>기간: ${Report.periodText(r)}</h3>
+      <h3>🎖 ${CONFIG.mileageUnit}회 단위 달성자 (${r.achievers.length}건)</h3>
+      ${r.achievers.length ? r.achievers.map((a, i) => `
+        <div class="card ach">
+          <div class="ach-head"><b>${esc(unitLabel(a.person))} ${esc(a.person.name)}</b>
+            <span class="badge">${a.milestone}회째 달성</span>${a.person.discharged ? '<span class="badge gray">전역</span>' : ''}</div>
+          <div class="ach-meta">현재 누적 ${a.total}회 · 지급 완료 ${a.grantedBlocks}회 · 지급 대상 ${a.earnedBlocks}회 ·
+            <b class="${a.pendingBlocks ? 'red' : ''}">미지급 ${a.pendingBlocks}회</b> · 전역 ${a.person.dischargeDate}
+            ${a.missing ? `<br>※ 도입 전 기록 ${a.missing}회는 사진이 없습니다.` : ''}</div>
+          <details><summary>전체 예배 날짜 (${a.allDates.length}회)</summary>
+            <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
+          <div class="thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
+          <div class="row">
+            <button class="btn small" data-server-share="${i}">🚀 서버로 이 형제만 발송</button>
+            <button class="btn small ghost" data-share="${i}">📧 기기 메일 앱 공유</button>
+            <button class="btn small ghost" data-dl="${i}">💾 사진 ${a.block.filter(b => b.hasPhoto).length}장 저장</button>
+          </div>
+        </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 넘긴 형제가 없습니다.</p>'}
+      <h3>📋 부대별 출석 현황</h3>${this.statsTable(r.stats)}
+      <details><summary>메일 본문 미리보기</summary><pre class="pre">${esc(text)}</pre></details>`;
+
+    for (const el of $$('.thumbs', $('#rep'))) await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
+
+    $$('[data-server-share]').forEach(b => b.onclick = async () => {
+      if (!isConn) return Modal.alert('먼저 ⚙️ 설정 탭에서 백엔드 서버 URL을 연결해 주세요.');
+      const a = r.achievers[+b.dataset.serverShare];
+      b.disabled = true; b.textContent = '발송 중…';
+      try {
+        const res = await Backend.sendWeeklyReportNow(cut, `${a.person.id}_${a.milestone}`);
+        await Modal.alert(`<b>${esc(a.person.name)}</b> 형제의 리포트와 사진(${res.photoCount}장)을 <b>${esc(res.to)}</b>으로 발송했습니다.`);
+      } catch (e) {
+        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
+      } finally {
+        b.disabled = false; b.textContent = '🚀 서버로 이 형제만 발송';
+      }
+    });
+    $$('[data-share]').forEach(b => b.onclick = async () => {
+      const a = r.achievers[+b.dataset.share];
+      const one = { ...r, achievers: [a] };
+      await shareReport(`${title} - ${a.person.name}`, Report.text(one), await photoFiles(a.block));
+    });
+    $$('[data-dl]').forEach(b => b.onclick = async () => downloadFiles(await photoFiles(r.achievers[+b.dataset.dl].block)));
+    $('#server-send-all').onclick = async () => {
+      if (!isConn) {
+        if (await Modal.confirm('아직 백엔드 서버가 연결되지 않았습니다.<br>⚙️ 설정 탭으로 이동해 서버를 연결할까요?', '설정으로 이동', '취소')) {
+          this.open('settings');
+        }
+        return;
+      }
+      const btn = $('#server-send-all');
+      btn.disabled = true; btn.textContent = '🚀 서버에서 발송 중…';
+      try {
+        const res = await Backend.sendWeeklyReportNow(cut);
+        await Modal.alert(`주간 리포트 메일을 성공적으로 발송했습니다!<br>· 수신: <b>${esc(res.to)}</b><br>· 달성자: <b>${res.achieverCount}건</b> (첨부 사진 ${res.photoCount}장)`);
+      } catch (e) {
+        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
+      } finally {
+        btn.disabled = false; btn.textContent = '🚀 서버에서 즉시 메일 발송';
+      }
+    };
+    $('#share-all').onclick = async () => {
+      const files = [];
+      for (const a of r.achievers) files.push(...await photoFiles(a.block));
+      if (files.length > 60 && !await Modal.confirm(`사진이 ${files.length}장이에요. 메일 용량(25MB)을 넘을 수 있어요.<br>형제별로 나눠 보내기를 권장합니다. 그래도 보낼까요?`)) return;
+      await shareReport(title, text, files);
+    };
+    $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
+  },
+
+  statsTable(st) {
+    if (!st.dates.length) return '<p class="muted">이 기간 출석 기록이 없습니다.</p>';
+    const rows = st.rows.filter(r => r.sum);
+    return `<div class="tbl-wrap"><table class="tbl stats"><thead><tr><th>부대</th>${st.dates.map(d => `<th>${shortDate(d)}</th>`).join('')}<th>합계</th></tr></thead>
+      <tbody>${rows.map(r => `<tr><td>${esc(r.label)}</td>${r.counts.map(c => `<td>${c || '-'}</td>`).join('')}<td><b>${r.sum}</b></td></tr>`).join('')}
+      <tr class="total"><td>전체</td>${st.totals.map(t => `<td>${t}</td>`).join('')}<td>${st.totals.reduce((a, b) => a + b, 0)}</td></tr></tbody></table></div>`;
+  },
+
+  /* ===================== 경고 [경고-확인필요] ===================== */
+  async tab_warnings(body) {
+    const list = await Store.warnings();
+    const s = await Store.settings();
+    const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
+    body.innerHTML = `<div class="note">같은 날 같은 부대·같은 이름으로 출석이 2건 이상 기록되거나, 이미 출석한 형제가 다시 출석/등록을 시도하면 여기에 남습니다.<br>
+      ${isConn
+        ? `✅ <b>백엔드 서버 연결됨</b>: 경고 상황 발생 즉시 <b>${esc(s.adminEmail)}</b>로 <b>[경고-확인필요]</b> 메일과 사진이 자동 발송됩니다.`
+        : `⚠️ <b>⚙️ 설정</b> 탭에서 백엔드 서버를 연결하면 경고 발생 즉시 <b>${esc(s.adminEmail)}</b>로 자동 메일이 발송됩니다.`}</div>
+      ${list.length ? list.map((w, i) => `
+        <div class="card warn-card ${w.resolved ? 'resolved' : ''}">
+          <div class="ach-head"><b>[경고-확인필요] ${esc(w.unitLabel)} ${esc(w.name)}</b> <span class="badge">${w.date}</span>
+            ${w.emailSent ? '<span class="badge" style="background:var(--green)">📧 메일발송됨</span>' : ''}
+            ${w.resolved ? '<span class="badge gray">확인 완료</span>' : ''}</div>
+          <div class="ach-meta">${esc(w.detail)}<br><span class="muted">발생: ${new Date(w.createdAt).toLocaleString('ko-KR')}</span>
+            ${w.resolved ? `<br>확인 메모: ${esc(w.memo || '')}` : ''}</div>
+          <div class="thumbs" data-i="${i}"></div>
+          <div class="row">
+            <button class="btn small" data-wserver="${i}">🚀 서버에서 즉시 메일 발송</button>
+            <button class="btn small ghost" data-wshare="${i}">📧 기기 메일 앱 공유</button>
+            ${w.resolved ? '' : `<button class="btn small ghost" data-wok="${i}">✔ 확인 완료 처리</button>`}
+          </div>
+        </div>`).join('') : '<p class="muted">경고가 없습니다. 👍</p>'}`;
+    const attsOf = async w => (await Promise.all((w.attendanceIds || []).map(id => Store.attendanceById(id)))).filter(Boolean);
+    for (const el of $$('.thumbs', body)) {
+      const atts = await attsOf(list[+el.dataset.i]);
+      if (atts.length) await this.fillThumbs(el, atts); else el.innerHTML = '<p class="muted">관련 사진 없음 (삭제/취소됨)</p>';
+    }
+    $$('[data-wserver]', body).forEach(b => b.onclick = async () => {
+      if (!isConn) return Modal.alert('먼저 ⚙️ 설정 탭에서 백엔드 서버 URL을 연결해 주세요.');
+      const w = list[+b.dataset.wserver];
+      b.disabled = true; b.textContent = '발송 중…';
+      try {
+        const res = await Backend.sendWarningEmailNow(w);
+        await Modal.alert(`<b>${esc(res.to)}</b>으로 [경고-확인필요] 메일을 발송했습니다.`);
+        this.render();
+      } catch (e) {
+        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
+        b.disabled = false; b.textContent = '🚀 서버에서 즉시 메일 발송';
+      }
+    });
+    $$('[data-wshare]', body).forEach(b => b.onclick = async () => {
+      const w = list[+b.dataset.wshare];
+      const atts = await attsOf(w);
+      await shareReport(`[경고-확인필요] ${w.date} ${w.unitLabel} ${w.name}`, Report.warningText(w, atts), await photoFiles(atts));
+    });
+    $$('[data-wok]', body).forEach(b => b.onclick = () => {
+      const w = list[+b.dataset.wok];
+      const m = Modal.open(`<h3>확인 완료 처리</h3><form class="mform" id="wf">
+        <label>확인 내용 메모 <input id="wf-m" placeholder="예) 동명이인 확인 / 본인이 실수로 두 번 누름 → 1건 삭제" required></label>
+        <div class="modal-actions"><button type="button" class="btn ghost" id="wf-c">취소</button><button class="btn primary">저장</button></div></form>`, 'wide');
+      $('#wf-c', m).onclick = () => Modal.close(m);
+      $('#wf', m).onsubmit = async e => { e.preventDefault(); await Store.resolveWarning(w.id, $('#wf-m', m).value.trim()); Modal.close(m); this.render(); };
+    });
+  },
+
+  /* ===================== 형제 관리 ===================== */
+  async tab_members(body) {
+    const ms = (await Store.membersWithStats()).sort((a, b) => unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) || koSort(a, b));
+    body.innerHTML = `<div class="toolbar">${this.unitSelect('f-unit', true, this.fUnit || '')}
+      <input id="f-q" placeholder="이름 검색" value="${esc(this.fQ || '')}">
+      <button class="btn primary" id="add">＋ 형제 추가</button></div><div id="list"></div>`;
+    const draw = () => {
+      this.fUnit = $('#f-unit').value; this.fQ = $('#f-q').value.trim();
+      const rows = ms.filter(m => (!this.fUnit || `${m.unit}|${m.company || ''}` === this.fUnit) && (!this.fQ || m.name.includes(this.fQ)));
+      $('#list').innerHTML = `<p class="muted">${rows.length}명</p><div class="tbl-wrap"><table class="tbl">
+        <thead><tr><th>소속</th><th>이름</th><th>전역일</th><th>누적</th><th>최근 출석</th><th></th></tr></thead>
+        <tbody>${rows.map(m => `<tr>
+          <td>${esc(unitLabel(m))}</td><td><b>${esc(m.name)}</b>${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
+          <td>${m.dischargeDate}</td><td>${m.total}</td><td>${m.last || '-'}</td>
+          <td class="nowrap"><button class="btn small ghost" data-hist="${m.id}">기록</button>
+            <button class="btn small ghost" data-edit="${m.id}">수정</button></td></tr>`).join('')}</tbody></table></div>`;
+      $$('[data-hist]').forEach(b => b.onclick = () => this.history(ms.find(m => m.id === b.dataset.hist)));
+      $$('[data-edit]').forEach(b => b.onclick = () => this.memberForm(ms.find(m => m.id === b.dataset.edit)));
+    };
+    $('#f-unit').onchange = draw; $('#f-q').oninput = draw;
+    $('#add').onclick = () => this.memberForm(null);
+    draw();
+  },
+
+  memberForm(m) {
+    const v = m || {};
+    const w = Modal.open(`<h3>${m ? '형제 정보 수정' : '형제 추가'}</h3>
+      <form class="mform" id="mf">
+        <label>소속 ${this.unitSelect('mf-unit', false, m ? `${m.unit}|${m.company || ''}` : '')}</label>
+        <label>이름 <input id="mf-name" value="${esc(v.name || '')}" required></label>
+        <label>전역일 <input id="mf-dc" type="date" value="${v.dischargeDate || ''}" required></label>
+        <fieldset><legend>시스템 도입 전 기록 (없으면 0)</legend>
+          <label>기존 누적 출석횟수 <input id="mf-bc" type="number" min="0" value="${v.baseCount || 0}"></label>
+          <label>기존 마일리지 지급횟수 <input id="mf-bg" type="number" min="0" value="${v.baseGrantedBlocks || 0}"></label>
+          <label>기존 마지막 출석일 <input id="mf-bl" type="date" value="${v.baseLastDate || ''}"></label>
+        </fieldset>
+        <div class="modal-actions">
+          ${m ? '<button type="button" class="btn danger" id="mf-del">삭제</button>' : ''}
+          <button type="button" class="btn ghost" id="mf-cancel">취소</button>
+          <button type="submit" class="btn primary">저장</button></div>
+      </form>`, 'wide');
+    $('#mf-cancel', w).onclick = () => Modal.close(w);
+    if (m) $('#mf-del', w).onclick = async () => {
+      if (!await Modal.confirm(`<b>${esc(m.name)}</b> 형제의 모든 출석 기록과 사진을 완전히 삭제할까요?<br>(전역자는 자동으로 보관함으로 이동하니, 잘못 등록한 경우에만 삭제하세요)`, '삭제')) return;
+      await Store.deleteMember(m.id); Modal.close(w); this.render();
+    };
+    $('#mf', w).onsubmit = async e => {
+      e.preventDefault();
+      const uv = $('#mf-unit', w).value;
+      if (!uv) return Modal.alert('소속을 선택해 주세요.');
+      const data = {
+        ...this.parseUnit(uv), name: $('#mf-name', w).value.replace(/\s/g, ''), dischargeDate: $('#mf-dc', w).value,
+        baseCount: +$('#mf-bc', w).value || 0, baseGrantedBlocks: +$('#mf-bg', w).value || 0, baseLastDate: $('#mf-bl', w).value || null,
+      };
+      if (m) await Store.updateMember(m.id, data); else await Store.addMember(data);
+      Modal.close(w); this.render();
+    };
+  },
+
+  /** 출석 기록 보기 (readOnly: 전역자) */
+  async history(m, readOnly = false) {
+    const atts = (m.atts || []).slice().sort((a, b) => b.ts - a.ts);
+    const w = Modal.open(`<h3>${esc(unitLabel(m))} ${esc(m.name)} · 출석 기록</h3>
+      <p class="modal-msg small">누적 ${m.total}회 (도입 전 ${m.baseCount || 0}회 + 기록 ${atts.length}회) · 전역 ${m.dischargeDate}</p>
+      <div class="hist">${atts.map(a => `<div class="hist-row" data-id="${a.id}">
+        <div class="hist-th"></div>
+        <div class="hist-info"><b>${a.date} (${weekdayOf(a.date)}) ${a.time}</b>${a.manual ? `<br><span class="badge">수동</span> ${esc(a.reason)}` : ''}</div>
+        ${readOnly ? '' : `<button class="btn small danger" data-del="${a.id}">삭제</button>`}</div>`).join('') || '<p class="muted">기록 없음</p>'}</div>
+      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'wide');
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+    for (const row of $$('.hist-row', w)) {
+      const a = atts.find(x => x.id === row.dataset.id);
+      await this.fillThumbs($('.hist-th', row), [a]);
+    }
+    $$('[data-del]', w).forEach(b => b.onclick = async () => {
+      if (!await Modal.confirm('이 출석 기록(사진 포함)을 삭제할까요?', '삭제')) return;
+      await Store.deleteAttendance(b.dataset.del);
+      Modal.close(w); this.render();
+    });
+  },
+
+  /* ===================== 수동 출석 보정 ===================== */
+  async tab_manual(body) {
+    const ms = await Store.membersWithStats();
+    const now = new Date();
+    body.innerHTML = `
+      <div class="card"><h3>수동 출석 추가</h3>
+        <form class="mform" id="man">
+          <label>소속 ${this.unitSelect('man-unit')}</label>
+          <label>이름 <select id="man-m"><option value="">먼저 소속을 선택하세요</option></select></label>
+          <div class="two"><label>날짜 <input type="date" id="man-d" value="${fmtDate(now)}" max="${fmtDate(now)}"></label>
+          <label>시간 <input type="time" id="man-t" value="${fmtTime(now)}"></label></div>
+          <label>사유 (필수) <textarea id="man-r" rows="2" placeholder="예) 공기계 고장으로 수기 명단 확인 / 근무로 늦게 도착"></textarea></label>
+          <button class="btn primary" type="submit">출석 추가</button>
+        </form></div>
+      <h3>최근 수동 보정 기록</h3><div id="man-list"></div>`;
+    $('#man-unit').onchange = e => {
+      const { unit, company } = this.parseUnit(e.target.value || '|');
+      const list = ms.filter(m => m.unit === unit && (m.company || null) === company).sort(koSort);
+      $('#man-m').innerHTML = `<option value="">이름 선택</option>` + list.map(m => `<option value="${m.id}">${esc(m.name)} (전역 ${m.dischargeDate}, 누적 ${m.total}회)</option>`).join('');
+    };
+    $('#man').onsubmit = async e => {
+      e.preventDefault();
+      const id = $('#man-m').value, d = $('#man-d').value, t = $('#man-t').value, reason = $('#man-r').value.trim();
+      if (!id) return Modal.alert('형제를 선택해 주세요.');
+      if (!d || !t) return Modal.alert('날짜와 시간을 입력해 주세요.');
+      if (!reason) return Modal.alert('사유를 꼭 입력해 주세요. 나중에 기억하는 데 도움이 돼요.');
+      try {
+        const res = await Store.recordAttendance({ memberId: id, when: new Date(`${d}T${t}`), manual: true, reason });
+        await Modal.alert(`추가했습니다. (누적 ${res.total}회)`);
+        this.render();
+      } catch (err) { Modal.alert(esc(err.message)); }
+    };
+    const list = await Store.recentManual();
+    $('#man-list').innerHTML = list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>출석일</th><th>소속 · 이름</th><th>사유</th><th>입력일</th><th></th></tr></thead>
+      <tbody>${list.map(a => `<tr><td>${a.date} ${a.time}</td><td>${esc(a.unitLabel)} ${esc(a.member ? a.member.name : '')}</td><td>${esc(a.reason)}</td>
+      <td>${fmtDate(new Date(a.createdAt))}</td><td><button class="btn small danger" data-del="${a.id}">삭제</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">수동 보정 기록이 없습니다.</p>';
+    $$('[data-del]', $('#man-list')).forEach(b => b.onclick = async () => {
+      if (!await Modal.confirm('이 수동 출석 기록을 삭제할까요?', '삭제')) return;
+      await Store.deleteAttendance(b.dataset.del); this.render();
+    });
+  },
+
+  /* ===================== 마일리지 ===================== */
+  async tab_mileage(body) {
+    const U = CONFIG.mileageUnit;
+    const [ms, grants] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
+    const G = {};
+    grants.forEach(g => (G[g.memberId] = G[g.memberId] || []).push(g));
+    const rows = ms.map(m => {
+      const upTo = Store.grantedUpTo(m, G[m.id]);
+      const earned = Math.floor(m.total / U), granted = Math.floor(upTo / U);
+      return { m, upTo, earned, granted, pending: Math.max(0, earned - granted) };
+    }).sort((a, b) => b.pending - a.pending || unitOrder(unitLabel(a.m)) - unitOrder(unitLabel(b.m)) || koSort(a.m, b.m));
+    const byId = Object.fromEntries(ms.map(m => [m.id, m]));
+
+    body.innerHTML = `
+      <div class="note">예배 ${U}회 = 마일리지(휴가) 1일. ‘지급 기록’은 부대에 마일리지를 건의한 날짜와, 몇 회차까지의 출석에 대해 건의했는지를 남깁니다.</div>
+      <div class="toolbar"><label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미지급자만 보기</label></div>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>소속</th><th>이름</th><th>누적</th><th>지급 대상</th><th>지급 완료</th><th>미지급</th><th>마지막 건의</th><th></th></tr></thead>
+      <tbody>${rows.filter(r => !this.onlyPending || r.pending).map(r => {
+        const last = (G[r.m.id] || []).sort((a, b) => b.proposedDate.localeCompare(a.proposedDate))[0];
+        return `<tr><td>${esc(unitLabel(r.m))}</td><td><b>${esc(r.m.name)}</b></td><td>${r.m.total}</td><td>${r.earned}회</td><td>${r.granted}회</td>
+          <td>${r.pending ? `<b class="red">${r.pending}회</b>` : '0'}</td><td>${last ? `${last.proposedDate} (~${last.uptoCount}회)` : (r.m.baseGrantedBlocks ? '도입 전' : '-')}</td>
+          <td><button class="btn small" data-grant="${r.m.id}">지급 기록</button></td></tr>`;
+      }).join('')}</tbody></table></div>
+      <h3>마일리지 건의(지급) 이력</h3>
+      ${grants.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>건의일</th><th>소속 · 이름</th><th>해당 회차</th><th>휴가</th><th>메모</th><th></th></tr></thead>
+        <tbody>${grants.sort((a, b) => b.proposedDate.localeCompare(a.proposedDate) || b.createdAt - a.createdAt).map(g => {
+          const m = byId[g.memberId];
+          return `<tr><td>${g.proposedDate}</td><td>${esc(m ? unitLabel(m) + ' ' + m.name : g.memberName || '')}</td>
+            <td>${g.fromCount}~${g.uptoCount}회</td><td>${g.days}일</td><td>${esc(g.memo || '')}</td>
+            <td><button class="btn small danger" data-gdel="${g.id}">삭제</button></td></tr>`;
+        }).join('')}</tbody></table></div>` : '<p class="muted">아직 기록이 없습니다.</p>'}`;
+
+    $('#only-pending').onchange = e => { this.onlyPending = e.target.checked; this.render(); };
+    $$('[data-gdel]').forEach(b => b.onclick = async () => {
+      if (!await Modal.confirm('이 건의 기록을 삭제할까요?', '삭제')) return;
+      await Store.deleteGrant(b.dataset.gdel); this.render();
+    });
+    $$('[data-grant]').forEach(b => b.onclick = () => {
+      const r = rows.find(x => x.m.id === b.dataset.grant);
+      const def = Math.max(r.earned * U, r.upTo + U);
+      const w = Modal.open(`<h3>${esc(unitLabel(r.m))} ${esc(r.m.name)} · 마일리지 건의 기록</h3>
+        <p class="modal-msg small">현재 누적 ${r.m.total}회 · 지급 완료 ${r.upTo}회차까지</p>
+        <form class="mform" id="gf">
+          <label>부대에 건의한 날짜 <input type="date" id="gf-d" value="${todayStr()}" required></label>
+          <label>몇 회차 출석까지 건의했나요? <input type="number" id="gf-u" min="${r.upTo + U}" step="${U}" value="${def}" required></label>
+          <p class="hint" id="gf-info"></p>
+          <label>메모 <input id="gf-memo" placeholder="예) 인사과 OOO 중사에게 전달"></label>
+          <div class="modal-actions"><button type="button" class="btn ghost" id="gf-c">취소</button><button class="btn primary" type="submit">저장</button></div>
+        </form>`, 'wide');
+      const info = () => {
+        const u = +$('#gf-u', w).value || 0;
+        const days = Math.floor((u - r.upTo) / U);
+        $('#gf-info', w).innerHTML = `${r.upTo + 1}회 ~ ${u}회 → 휴가 <b>${days}일</b>` + (u > r.m.total ? ' <span class="red">(현재 누적보다 많아요!)</span>' : '');
+      };
+      $('#gf-u', w).oninput = info; info();
+      $('#gf-c', w).onclick = () => Modal.close(w);
+      $('#gf', w).onsubmit = async e => {
+        e.preventDefault();
+        const u = +$('#gf-u', w).value;
+        if (u <= r.upTo || (u - r.upTo) % U) return Modal.alert(`${r.upTo + U}, ${r.upTo + 2 * U} … 처럼 ${U}의 배수로 입력해 주세요.`);
+        await Store.addGrant({
+          memberId: r.m.id, memberName: r.m.name, unitLabel: unitLabel(r.m),
+          proposedDate: $('#gf-d', w).value, fromCount: r.upTo + 1, uptoCount: u, days: (u - r.upTo) / U, memo: $('#gf-memo', w).value.trim(),
+        });
+        Modal.close(w); this.render();
+      };
+    });
+  },
+
+  /* ===================== 엑셀 일괄 등록 ===================== */
+  async tab_import(body) {
+    body.innerHTML = `
+      <div class="card"><h3>엑셀로 형제 명단 한 번에 등록</h3>
+        <ol class="steps"><li>양식을 내려받아 ‘명단’ 시트에 작성합니다.</li><li>아래에서 파일을 선택하면 미리보기가 나옵니다.</li><li>확인 후 ‘등록하기’를 누릅니다. (이미 등록된 형제는 건너뜁니다)</li></ol>
+        <a class="btn ghost" href="templates/명단_일괄등록_양식.xlsx" download>📄 엑셀 양식 내려받기</a>
+        <label class="file-btn btn primary">📂 작성한 엑셀 파일 선택<input type="file" id="xf" accept=".xlsx,.xls,.csv" hidden></label>
+      </div><div id="xprev"></div>`;
+    $('#xf').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (typeof XLSX === 'undefined') return Modal.alert('엑셀 읽기 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');
+      try {
+        const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
+        const ws = wb.Sheets['명단'] || wb.Sheets[wb.SheetNames[0]];
+        this.previewImport(XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }));
+      } catch (err) { Modal.alert('파일을 읽지 못했어요: ' + esc(err.message)); }
+    };
+  },
+
+  async previewImport(aoa) {
+    const hi = aoa.findIndex(r => r.some(c => String(c).includes('이름')));
+    if (hi < 0) return Modal.alert('‘이름’ 열을 찾지 못했어요. 양식을 사용해 주세요.');
+    const H = aoa[hi].map(c => String(c));
+    const col = kw => H.findIndex(h => h.includes(kw));
+    const C = { unit: col('소속'), company: col('중대'), name: col('이름'), dc: col('전역'), bc: col('누적'), bg: col('마일리지'), bl: col('마지막') };
+    const existing = await Store.membersWithStats();
+    const seen = new Set(existing.map(m => `${m.unit}|${m.company || ''}|${m.name}|${m.dischargeDate}`));
+    const rows = [];
+    aoa.slice(hi + 1).forEach((r, i) => {
+      const get = k => (C[k] >= 0 ? r[C[k]] : '');
+      const name = String(get('name')).replace(/\s/g, '');
+      if (!name) return;
+      let unit = String(get('unit')).trim(), company = String(get('company')).trim() || null;
+      // 이전 양식 호환: 8단본부/8단통신, 608수송대대+중대 자동 변환
+      if (unit === '8단본부') unit = '단본부';
+      if (unit === '8단통신') unit = '단통신';
+      if (unit === '608수송대대' && company) {
+        const map608 = { '본부중대': '608본부', '중형중대': '608중형', '버스중대': '608버스', '대형중대': '608대형' };
+        if (map608[company]) { unit = map608[company]; company = null; }
+      }
+      if (unit === '18보급대대') company = null;
+      const u = CONFIG.units.find(x => x.name === unit);
+      const rec = {
+        line: hi + i + 2, name, unit, company: u && u.companies ? company : null,
+        dischargeDate: normalizeDate(get('dc')), baseCount: parseInt(get('bc')) || 0,
+        baseGrantedBlocks: parseInt(get('bg')) || 0, baseLastDate: normalizeDate(get('bl')) || null,
+      };
+      let err = '';
+      if (!u) err = '소속부대 이름이 올바르지 않음';
+      else if (u.companies && !u.companies.includes(company)) err = `중대를 선택해야 함 (${u.companies.join('/')})`;
+      else if (!rec.dischargeDate) err = '전역일 형식 오류';
+      else if (rec.dischargeDate < todayStr()) err = '이미 전역함';
+      else if (seen.has(`${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`)) err = '이미 등록됨 (건너뜀)';
+      if (!err) seen.add(`${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`);
+      rec.err = err; rows.push(rec);
+    });
+    const ok = rows.filter(r => !r.err);
+    $('#xprev').innerHTML = `<h3>미리보기 · 등록 가능 ${ok.length}명 / 제외 ${rows.length - ok.length}명</h3>
+      <button class="btn primary" id="xgo" ${ok.length ? '' : 'disabled'}>✔ ${ok.length}명 등록하기</button>
+      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>행</th><th>소속</th><th>이름</th><th>전역일</th><th>도입 전 출석</th><th>도입 전 지급</th><th>마지막 출석</th><th>상태</th></tr></thead>
+      <tbody>${rows.map(r => `<tr class="${r.err ? 'bad' : ''}"><td>${r.line}</td><td>${esc(r.unit)} ${esc(r.company || '')}</td><td>${esc(r.name)}</td><td>${r.dischargeDate}</td>
+        <td>${r.baseCount}</td><td>${r.baseGrantedBlocks}</td><td>${r.baseLastDate || '-'}</td><td>${r.err ? esc(r.err) : '✅'}</td></tr>`).join('')}</tbody></table></div>`;
+    $('#xgo').onclick = async () => {
+      await Store.addMembersBatch(ok);
+      await Modal.alert(`${ok.length}명을 등록했습니다.`);
+      this.open('members');
+    };
+  },
+
+  /* ===================== 전역자 보관함 ===================== */
+  async tab_discharged(body) {
+    const list = await Store.dischargedList();
+    body.innerHTML = `<div class="note">전역일이 지난 형제는 자동으로 이곳에 옮겨져 출석 명단에서 사라집니다. 출석 기록·사진·마일리지 이력은 증빙용으로 보존됩니다.</div>
+      ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>소속</th><th>이름</th><th>전역일</th><th>누적</th><th>이동일</th><th></th></tr></thead>
+      <tbody>${list.map(d => `<tr><td>${esc(unitLabel(d))}</td><td><b>${esc(d.name)}</b></td><td>${d.dischargeDate}</td><td>${d.total}</td><td>${d.movedAt}</td>
+        <td class="nowrap"><button class="btn small ghost" data-hist="${d.id}">기록</button><button class="btn small ghost" data-rest="${d.id}">복원</button></td></tr>`).join('')}</tbody></table></div>`
+      : '<p class="muted">전역자가 없습니다.</p>'}`;
+    $$('[data-hist]').forEach(b => b.onclick = () => this.history(list.find(d => d.id === b.dataset.hist), true));
+    $$('[data-rest]').forEach(b => b.onclick = () => {
+      const d = list.find(x => x.id === b.dataset.rest);
+      const w = Modal.open(`<h3>${esc(d.name)} 복원</h3><p class="modal-msg small">전역일을 잘못 입력한 경우에만 사용하세요. 올바른 전역일을 입력해 주세요.</p>
+        <form class="mform" id="rf"><label>전역일 <input type="date" id="rf-d" min="${todayStr()}" required></label>
+        <div class="modal-actions"><button type="button" class="btn ghost" id="rf-c">취소</button><button class="btn primary">복원</button></div></form>`);
+      $('#rf-c', w).onclick = () => Modal.close(w);
+      $('#rf', w).onsubmit = async e => { e.preventDefault(); await Store.restoreDischarged(d.id, $('#rf-d', w).value); Modal.close(w); this.render(); };
+    });
+  },
+
+  /* ===================== 설정 / 인계 ===================== */
+  async tab_settings(body) {
+    const s = await Store.settings();
+    const apiUrl = await Backend.getUrl();
+    const pending = await Backend.pendingCount();
+    let usage = '';
+    try { const est = await navigator.storage.estimate(); usage = `${(est.usage / 1048576).toFixed(1)}MB 사용 중 (사용 가능 약 ${(est.quota / 1073741824).toFixed(1)}GB)`; } catch (e) { }
+    body.innerHTML = `
+      <div class="card"><h3>☁️ 백엔드 서버 연동 (Google 계정 통합 · 자동 메일 · 데스크탑 동기화)</h3>
+        <p class="hint"><code>cgchurch@gmail.com</code> 계정의 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호(초기 0113)</b>를 입력해 연결합니다.<br>
+          봉사자가 노트북에서 <code>cgchurch@gmail.com</code> 메일에 접속하더라도 백엔드 비밀번호 없이는 백엔드 서버나 설정에 접근할 수 없으며, 비밀번호는 구글 시트에 노출되지 않고 보안 영역에만 저장됩니다.</p>
+        <form class="mform" id="bf" style="margin-top:.6rem">
+          <label>Google Apps Script 웹앱 URL
+            <input type="url" id="bf-url" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(apiUrl)}">
+          </label>
+          <label>백엔드 서버 비밀번호 (초기 0113)
+            <input type="password" id="bf-pw" inputmode="numeric" maxlength="8" placeholder="백엔드 비밀번호 입력 (초기 0113)" value="${esc(Backend.sessionBackendPw || '')}">
+          </label>
+          <div class="row">
+            <button class="btn primary" type="submit" id="bf-save">🔌 서버 연결 및 일요일 13:00 자동발송 켜기</button>
+            ${apiUrl ? `<button class="btn ghost" type="button" id="bf-check">🔓 백엔드 상태 확인</button>` : ''}
+            ${apiUrl ? `<button class="btn ghost" type="button" id="bf-flush">🔄 대기 작업 동기화 (${pending}건)</button>` : ''}
+          </div>
+        </form>
+        <div id="bk-status" style="margin-top:.8rem"></div>
+        <div class="row" style="margin-top:.8rem;padding-top:.8rem;border-top:1px solid #eef0f3">
+          <button class="btn ghost small" id="cloud-push" ${apiUrl ? '' : 'disabled'}>☁️↑ 이 기기 데이터 → 서버로 전체 업로드</button>
+          <button class="btn ghost small" id="cloud-pull" ${apiUrl ? '' : 'disabled'}>☁️↓ 서버 데이터 → 이 기기로 전체 복원 (데스크탑/새 기기 동기화)</button>
+        </div>
+      </div>
+      <div class="card"><h3>🔐 백엔드 서버 비밀번호 변경 (초기 0113)</h3>
+        <p class="hint">백엔드 서버(웹 콘솔 및 서버 관리 작업)에 들어갈 때 사용하는 비밀번호입니다. 교회 데스크탑에서 작업하실 때와 후임 군종목사님 인계 시 원하는 번호로 변경하실 수 있습니다.</p>
+        <form class="mform" id="bpf" style="margin-top:.5rem">
+          <label>현재 백엔드 비밀번호 <input type="password" id="bpf-cur" inputmode="numeric" maxlength="8" placeholder="현재 백엔드 비밀번호 (초기 0113)" required></label>
+          <div class="two">
+            <label>새 백엔드 비밀번호 (숫자 4~8자리) <input type="password" id="bpf-1" inputmode="numeric" maxlength="8" pattern="\\d{4,8}" required></label>
+            <label>새 백엔드 비밀번호 확인 <input type="password" id="bpf-2" inputmode="numeric" maxlength="8" pattern="\\d{4,8}" required></label>
+          </div>
+          <button class="btn primary" ${apiUrl ? '' : 'disabled'}>백엔드 비밀번호 변경</button>
+        </form>
+      </div>
+      <div class="card"><h3>📧 이메일</h3>
+        <form class="mform" id="ef">
+          <label>리포트 받는 이메일 <input type="email" id="ef-a" value="${esc(s.adminEmail)}" required></label>
+          <label>리포트 보내는 이메일 (공기계 계정) <input type="email" id="ef-s" value="${esc(s.senderEmail)}" required></label>
+          <button class="btn primary">저장</button></form></div>
+      <div class="card"><h3>🔑 화면 잠금 비밀번호 변경 (목사님 전용 입장용 · 초기 0113)</h3>
+        <form class="mform" id="pf">
+          <div class="two"><label>새 비밀번호 (숫자 4자리) <input id="pf-1" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></label>
+          <label>한 번 더 <input id="pf-2" inputmode="numeric" maxlength="4" pattern="\\d{4}" required></label></div>
+          <button class="btn primary">변경</button></form></div>
+      <div class="card"><h3>💾 파일 백업 · 인계</h3>
+        <p class="muted">${usage}</p>
+        <p>백엔드 서버와 별개로 기기 전체 데이터를 파일 하나로 내려받거나 복원할 수 있습니다.</p>
+        <div class="row">
+          <button class="btn primary" id="bk">⬇ 전체 백업 파일 저장 (사진 포함)</button>
+          <label class="file-btn btn ghost">⬆ 백업 파일 불러오기<input type="file" id="rs" accept=".json" hidden></label>
+          <button class="btn ghost" id="xl">📊 출석 기록 엑셀로 내보내기</button>
+        </div>
+        <details><summary>후임 군종목사님께 인계하는 방법</summary>
+          <ol class="steps"><li>위 ‘이메일’에서 받는 이메일을 후임 목사님 주소로 바꿉니다. (서버에도 자동 반영됩니다)</li>
+          <li>‘백엔드 서버 비밀번호 변경’과 ‘화면 잠금 비밀번호 변경’으로 새 비밀번호를 정해 전달합니다.</li>
+          <li>교회 데스크탑에서 이 프로그램을 실행하고 웹앱 URL만 연결해 두면 예배당 공기계의 출석 데이터가 데스크탑으로 자동 동기화됩니다.</li></ol></details>
+      </div>`;
+
+    const renderServerStatus = st => {
+      const box = $('#bk-status');
+      if (!box) return;
+      if (!st) {
+        box.innerHTML = apiUrl
+          ? `<p class="muted">🔒 백엔드 상세 상태(구글 시트/사진 폴더 링크 등)를 보려면 백엔드 비밀번호(초기 0113)를 입력하고 <b>‘🔓 백엔드 상태 확인’</b>을 눌러 주세요.</p>`
+          : `<p class="muted">아직 연결된 백엔드 서버가 없습니다. (<code>백엔드_연동_안내.md</code>를 참고해 5분 만에 무료로 만들 수 있어요)</p>`;
+        return;
+      }
+      box.innerHTML = `
+        <div class="note" style="margin:0;background:#f0fdf4;border-left-color:var(--green)">
+          <b>✅ 백엔드 인증 및 서버 정상 연결됨</b> (발신 계정: <b>${esc(st.senderEmail)}</b> → 수신 계정: <b>${esc(st.adminEmail)}</b>)<br>
+          · 서버 보관 현황: 현역 <b>${st.memberCount}명</b> / 출석기록 <b>${st.attendanceCount}건</b> / 전역보관 <b>${st.dischargedCount}명</b><br>
+          · 일요일 13:00 자동 메일 트리거: <b>${st.hasWeeklyTrigger ? '🟢 작동 중' : '⚪ 미설정 («서버 연결» 버튼을 눌러 켜 주세요)'}</b>
+          ${st.lastWeeklyReportSentAt ? ` (최근 자동/서버 발송: ${esc(st.lastWeeklyReportSentAt)})` : ''}<br>
+          <div class="row" style="margin-top:.4rem">
+            <a class="btn small ghost" href="${esc(st.spreadsheetUrl)}" target="_blank" rel="noopener">📊 구글 시트 DB 열기</a>
+            <a class="btn small ghost" href="${esc(st.photoFolderUrl)}" target="_blank" rel="noopener">📁 구글 드라이브 사진 폴더 열기</a>
+          </div>
+        </div>`;
+    };
+
+    if (apiUrl && Backend.sessionBackendPw) {
+      renderServerStatus(Backend.serverStatus);
+      Backend.adminCall('status').then(r => renderServerStatus(r.status)).catch(e => {
+        const box = $('#bk-status');
+        if (box) box.innerHTML = `<p class="err">⚠️ 서버 상태 확인 실패: ${esc(e.message)}</p>`;
+      });
+    } else {
+      renderServerStatus(null);
+    }
+
+    const chkBtn = $('#bf-check');
+    if (chkBtn) chkBtn.onclick = async () => {
+      const pw = $('#bf-pw').value.trim();
+      if (pw) Backend.sessionBackendPw = pw;
+      try {
+        const r = await Backend.adminCall('status');
+        $('#bf-pw').value = Backend.sessionBackendPw;
+        renderServerStatus(r.status);
+      } catch (err) {
+        await Modal.alert(esc(err.message));
+      }
+    };
+
+    $('#bf').onsubmit = async e => {
+      e.preventDefault();
+      const url = $('#bf-url').value.trim();
+      const pw = $('#bf-pw').value.trim();
+      if (!url) {
+        await Store.saveSettings({ apiUrl: '' }, false);
+        Backend.serverStatus = null;
+        Backend.lockSession();
+        await Modal.alert('백엔드 서버 연결을 해제했습니다.');
+        return this.render();
+      }
+      if (!pw) return Modal.alert('백엔드 서버 비밀번호(초기 0113)를 입력해 주세요.');
+      const btn = $('#bf-save');
+      btn.disabled = true; btn.textContent = '연결 및 트리거 설정 중…';
+      try {
+        await Backend.connectAndSetup(url, pw);
+        await Modal.alert(`<b>백엔드 서버 인증 및 연결 완료!</b><br>· 매주 일요일 13:00 자동 리포트 발송이 켜졌습니다.<br>· 기존에 이 기기에 있던 명단/사진을 서버로 올리려면 <b>‘☁️↑ 이 기기 데이터 → 서버로 전체 업로드’</b>를, 서버 데이터를 이 데스크탑으로 가져오려면 <b>‘☁️↓ 서버 데이터 → 이 기기로 전체 복원’</b>을 눌러 주세요.`);
+        this.render();
+      } catch (err) {
+        await Modal.alert('연결 실패: ' + esc(err.message));
+        btn.disabled = false; btn.textContent = '🔌 서버 연결 및 일요일 13:00 자동발송 켜기';
+      }
+    };
+
+    $('#bpf').onsubmit = async e => {
+      e.preventDefault();
+      const cur = $('#bpf-cur').value.trim();
+      const p1 = $('#bpf-1').value.trim(), p2 = $('#bpf-2').value.trim();
+      if (!/^\d{4,8}$/.test(p1)) return Modal.alert('새 백엔드 비밀번호는 숫자 4~8자리로 입력해 주세요.');
+      if (p1 !== p2) return Modal.alert('새 백엔드 비밀번호 두 개가 서로 다릅니다.');
+      try {
+        await Backend.changeBackendPassword(cur, p1);
+        $('#bf-pw').value = p1;
+        e.target.reset();
+        await Modal.alert('백엔드 서버 비밀번호를 성공적으로 변경했습니다.');
+      } catch (err) {
+        await Modal.alert('변경 실패: ' + esc(err.message));
+      }
+    };
+
+    const flushBtn = $('#bf-flush');
+    if (flushBtn) flushBtn.onclick = async () => {
+      flushBtn.disabled = true; flushBtn.textContent = '동기화 중…';
+      await Backend.syncFromServerIfChanged(true);
+      if (Backend.lastError) await Modal.alert('동기화 오류: ' + esc(Backend.lastError));
+      else await Modal.alert('서버와 최신 상태로 동기화했습니다.');
+      this.render();
+    };
+
+    $('#cloud-push').onclick = async () => {
+      const pw = $('#bf-pw').value.trim();
+      if (pw) Backend.sessionBackendPw = pw;
+      if (!await Modal.confirm('현재 기기에 있는 모든 형제 명단, 출석 기록, 인증 사진을 서버(Google 시트/드라이브)로 업로드할까요?', '전체 업로드')) return;
+      const w = Modal.open(`<h3>☁️↑ 서버로 업로드 중…</h3><p class="modal-msg" id="cp-msg">준비 중…</p>`);
+      try {
+        await Backend.pushAllToServer((done, total, msg) => {
+          const el = $('#cp-msg', w); if (el) el.textContent = msg;
+        });
+        Modal.close(w);
+        await Modal.alert('이 기기의 모든 데이터와 사진을 서버에 안전하게 업로드했습니다!');
+        this.render();
+      } catch (err) {
+        Modal.close(w);
+        await Modal.alert('업로드 실패: ' + esc(err.message));
+      }
+    };
+
+    $('#cloud-pull').onclick = async () => {
+      const pw = $('#bf-pw').value.trim();
+      if (pw) Backend.sessionBackendPw = pw;
+      if (!await Modal.confirm('서버(Google 시트/드라이브)에 저장된 전체 데이터를 이 기기로 가져와 복원할까요?<br><b>현재 기기의 데이터는 서버 데이터로 대체됩니다.</b>', '서버에서 복원')) return;
+      const w = Modal.open(`<h3>☁️↓ 서버에서 복원 중…</h3><p class="modal-msg" id="cp-msg">준비 중…</p>`);
+      try {
+        const res = await Backend.pullAllFromServer((done, total, msg) => {
+          const el = $('#cp-msg', w); if (el) el.textContent = msg;
+        }, true);
+        Modal.close(w);
+        await Modal.alert(`서버에서 복원을 완료했습니다!<br>(형제 ${res.members}명, 출석기록 ${res.attendance}건, 사진 ${res.photos}장)`);
+        this.render();
+      } catch (err) {
+        Modal.close(w);
+        await Modal.alert('복원 실패: ' + esc(err.message));
+      }
+    };
+
+    $('#ef').onsubmit = async e => {
+      e.preventDefault();
+      try {
+        if (apiUrl) await Backend.ensureBackendAuth();
+        await Store.saveSettings({ adminEmail: $('#ef-a').value.trim(), senderEmail: $('#ef-s').value.trim() });
+        await Modal.alert('저장했습니다. (서버 설정에도 자동 반영됩니다)');
+        this.render();
+      } catch (err) {
+        await Modal.alert(esc(err.message));
+      }
+    };
+    $('#pf').onsubmit = async e => {
+      e.preventDefault();
+      const a = $('#pf-1').value, b = $('#pf-2').value;
+      if (!/^\d{4}$/.test(a)) return Modal.alert('숫자 4자리로 입력해 주세요.');
+      if (a !== b) return Modal.alert('두 비밀번호가 달라요.');
+      await Store.saveSettings({ password: a }); Modal.alert('화면 잠금 비밀번호를 변경했습니다.'); e.target.reset();
+    };
+    $('#bk').onclick = async () => {
+      const data = await Store.exportBackup();
+      downloadBlob(new Blob([JSON.stringify(data)], { type: 'application/json' }), `천군교회_출석백업_${todayStr()}.json`);
+    };
+    $('#rs').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (!await Modal.confirm('백업 파일로 복원하면 <b>현재 기기의 데이터가 모두 바뀝니다.</b> 계속할까요?', '복원')) return;
+      try { await Store.importBackup(JSON.parse(await f.text())); await Modal.alert('복원했습니다.'); this.render(); }
+      catch (err) { Modal.alert('복원 실패: ' + esc(err.message)); }
+    };
+    $('#xl').onclick = () => this.exportExcel();
+  },
+
+  async exportExcel() {
+    if (typeof XLSX === 'undefined') return Modal.alert('엑셀 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');
+    const people = await Store.allPeopleFull();
+    const U = CONFIG.mileageUnit;
+    const roster = people.map(p => ({
+      상태: p.discharged ? '전역' : '현역', 소속: unitLabel(p), 이름: p.name, 전역일: p.dischargeDate,
+      누적출석: p.total, 도입전출석: p.baseCount || 0, 지급대상: Math.floor(p.total / U),
+      지급완료: Math.floor(Store.grantedUpTo(p, p.grants) / U), 최근출석: p.last || '',
+    }));
+    const att = people.flatMap(p => p.atts.map(a => ({
+      날짜: a.date, 요일: weekdayOf(a.date), 시간: a.time, 소속: unitLabel(p), 이름: p.name,
+      구분: a.manual ? '수동' : '사진', 사유: a.reason || '', 사진파일명: a.hasPhoto ? a.fileName : '',
+    }))).sort((a, b) => (a.날짜 + a.시간).localeCompare(b.날짜 + b.시간));
+    const mil = people.flatMap(p => p.grants.map(g => ({
+      건의일: g.proposedDate, 소속: unitLabel(p), 이름: p.name, 시작회차: g.fromCount, 종료회차: g.uptoCount, 휴가일수: g.days, 메모: g.memo || '',
+    })));
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(roster), '명단');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(att), '출석기록');
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(mil), '마일리지');
+    XLSX.writeFile(wb, `천군교회_출석기록_${todayStr()}.xlsx`);
+  },
+};
