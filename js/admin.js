@@ -97,8 +97,7 @@ const Admin = {
           ${cuts.map(c => `<option value="${c.getTime()}" ${String(c.getTime()) === sel ? 'selected' : ''}>${fmtDate(c)} (일) 13:00</option>`).join('')}
           <option value="now" ${sel === 'now' ? 'selected' : ''}>지금 시점 (미리보기)</option>
         </select></label>
-        <button class="btn primary" id="server-send-all">🚀 서버에서 즉시 메일 발송</button>
-        <button class="btn ghost" id="share-all">📧 기기 메일 앱으로 보내기</button>
+        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (24회 달성자 + 인증사진)</button>
         <button class="btn ghost" id="copy">📋 본문 복사</button>
       </div>
       <div class="note">${isConn
@@ -126,8 +125,7 @@ const Admin = {
             <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
           <div class="thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
-            <button class="btn small" data-server-share="${i}">🚀 서버로 이 형제만 발송</button>
-            <button class="btn small ghost" data-share="${i}">📧 기기 메일 앱 공유</button>
+            <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송</button>
             <button class="btn small ghost" data-dl="${i}">💾 사진 ${a.block.filter(b => b.hasPhoto).length}장 저장</button>
           </div>
         </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 넘긴 형제가 없습니다.</p>'}
@@ -535,6 +533,23 @@ const Admin = {
     let usage = '';
     try { const est = await navigator.storage.estimate(); usage = `${(est.usage / 1048576).toFixed(1)}MB 사용 중 (사용 가능 약 ${(est.quota / 1073741824).toFixed(1)}GB)`; } catch (e) { }
     body.innerHTML = `
+      <div class="card" style="border:2px solid #2563eb;background:#f0f7ff;margin-bottom:1.2rem">
+        <div style="display:flex;align-items:center;gap:.5rem">
+          <span style="font-size:1.6rem">📱</span>
+          <h3 style="margin:0;color:#1e3a8a">예배당 출석 단말기(공기계) 승인 관리</h3>
+        </div>
+        <p class="hint" style="margin-top:.5rem;line-height:1.6;color:#1e293b">
+          <b>공기계 2~3대(또는 그 이상) 모두 등록 가능합니다.</b><br>
+          예배당에 비치할 각 공기계에서 이 웹앱을 열고, [목사님 전용] 메뉴의 이 화면에서 아래 <b>[📱 이 기기를 출석 단말기로 승인]</b> 버튼을 한 번씩만 눌러두시면 됩니다.<br>
+          승인되지 않은 일반 용사들의 스마트폰은 첫 화면 터치 시 출석이 원천 차단됩니다.
+        </p>
+        <div style="margin-top:.8rem;padding:.8rem;border-radius:10px;background:#fff;border:1px solid #bfdbfe;font-size:1rem;font-weight:700">
+          현재 기기 상태: <span id="kiosk-status">${s.isKioskAuthorized ? '🟢 예배당 공식 출석 단말기로 승인됨 (출석 촬영 가능)' : '🔴 미승인 기기 (외부 접속 차단 상태: 출석 촬영 불가)'}</span>
+        </div>
+        <div class="row" style="margin-top:.8rem">
+          <button class="btn primary" id="kiosk-auth-btn" style="font-size:1rem;padding:.6rem 1.2rem">${s.isKioskAuthorized ? '🚫 단말기 승인 해제 (개인 조회 전용 모드로 변경)' : '📱 이 기기를 예배당 출석 단말기로 승인'}</button>
+        </div>
+      </div>
       <div class="card"><h3>☁️ 백엔드 서버 연동 (Google 계정 통합 · 자동 메일 · 데스크탑 동기화)</h3>
         <p class="hint"><code>cgchurch@gmail.com</code> 계정의 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호</b>를 입력해 연결합니다.<br>
           봉사자가 노트북에서 <code>cgchurch@gmail.com</code> 메일에 접속하더라도 백엔드 비밀번호 없이는 백엔드 서버나 설정에 접근할 수 없으며, 비밀번호는 구글 시트에 노출되지 않고 보안 영역에만 저장됩니다.</p>

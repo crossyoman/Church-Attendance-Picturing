@@ -745,13 +745,8 @@ function sendWarningEmailInternal(w, inlinePhotos) {
     if (blob) attachments.push(blob);
   });
 
-  MailApp.sendEmail(to, subject, plainBody, {
-    name: `${APP_CONFIG.churchName} 출석체크`,
-    htmlBody: htmlBody,
-    attachments: attachments,
-  });
-
-  return { sent: true, to, attachmentCount: attachments.length };
+  // 구글 정책 차단 방지: 메일은 목사님 단말기의 메일 앱을 통해 발송됩니다.
+  return { sent: true, to, attachmentCount: attachments.length, clientSend: true };
 }
 
 /* ============================================================================
@@ -1058,34 +1053,8 @@ function sendWeeklyReportEmail(cutoffDate, achieverOnlyKey, isManualTrigger) {
   const totalPhotos = groups.reduce((s, g) => s + g.blobs.length, 0);
   let emailsSent = 0;
 
-  if (totalBytes <= MAX_EMAIL_BYTES) {
-    const allBlobs = [];
-    groups.forEach(g => g.blobs.forEach(b => allBlobs.push(b)));
-    MailApp.sendEmail(to, baseSubject, plainBody, {
-      name: `${APP_CONFIG.churchName} 출석체크`,
-      htmlBody: htmlBody,
-      attachments: allBlobs,
-    });
-    emailsSent = 1;
-  } else {
-    MailApp.sendEmail(to, baseSubject, plainBody + '\n\n※ 첨부 사진 용량이 커서 달성자별 인증 사진 메일을 이어서 발송합니다.', {
-      name: `${APP_CONFIG.churchName} 출석체크`,
-      htmlBody: htmlBody,
-    });
-    emailsSent++;
-    groups.forEach(g => {
-      if (!g.blobs.length) return;
-      const p = g.achiever.person;
-      const sub = `${baseSubject} - 인증사진 (${unitLabel(p)} ${p.name} ${g.achiever.milestone}회차)`;
-      const singleReport = Object.assign({}, r, { achievers: [g.achiever] });
-      MailApp.sendEmail(to, sub, formatReportPlainText(singleReport), {
-        name: `${APP_CONFIG.churchName} 출석체크`,
-        htmlBody: formatReportHtml(singleReport),
-        attachments: g.blobs,
-      });
-      emailsSent++;
-    });
-  }
+  // 구글 정책 차단 방지: 메일은 목사님 화면에서 원클릭으로 기기 메일 앱을 통해 발송됩니다.
+  emailsSent = 1;
 
   if (!achieverOnlyKey) {
     saveSettingsOnServer({
@@ -1105,48 +1074,9 @@ function sendWeeklyReportEmail(cutoffDate, achieverOnlyKey, isManualTrigger) {
   };
 }
 
-function cronWeeklyReport() {
-  const now = new Date();
-  const cutoff = getLastCutoff(now);
-  const settings = getSettingsFromServer();
-  const cutoffKey = String(cutoff.getTime());
-  if (settings.lastWeeklyReportCutoff === cutoffKey) {
-    return;
-  }
-  if (now.getTime() >= cutoff.getTime()) {
-    sendWeeklyReportEmail(cutoff, null, false);
-  }
-}
-
+// 메일 발송은 보안 및 구글 차단 방지를 위해 목사님 전용 메뉴의 '기기 메일 앱으로 보내기'를 통해 직접 발송됩니다.
 function installTriggers() {
-  const existing = ScriptApp.getProjectTriggers();
-  existing.forEach(t => {
-    const fn = t.getHandlerFunction();
-    if (fn === 'cronWeeklyReport' || fn === 'sendWeeklyReportEmail') {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
-
-  ScriptApp.newTrigger('cronWeeklyReport')
-    .timeBased()
-    .onWeekDay(ScriptApp.WeekDay.SUNDAY)
-    .atHour(APP_CONFIG.reportHour)
-    .nearMinute(0)
-    .inTimezone('Asia/Seoul')
-    .create();
-
-  ScriptApp.newTrigger('cronWeeklyReport')
-    .timeBased()
-    .everyMinutes(10)
-    .create();
-
-  const settings = getSettingsFromServer();
-  if (!settings.lastWeeklyReportCutoff) {
-    const lastCut = getLastCutoff(new Date());
-    if (Date.now() - lastCut.getTime() > 2 * 3600 * 1000) {
-      saveSettingsOnServer({ lastWeeklyReportCutoff: String(lastCut.getTime()) });
-    }
-  }
+  return { ok: true, mode: 'client_share' };
 }
 
 /* ============================================================================
@@ -1219,8 +1149,7 @@ function getServerStatus() {
   const ss = getOrCreateDb();
   const folder = getOrCreatePhotoFolder();
   const settings = getSettingsFromServer();
-  const triggers = ScriptApp.getProjectTriggers().map(t => t.getHandlerFunction());
-  const hasWeeklyTrigger = triggers.includes('cronWeeklyReport');
+  const hasWeeklyTrigger = false;
 
   return {
     spreadsheetUrl: ss.getUrl(),

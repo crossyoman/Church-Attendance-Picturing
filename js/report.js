@@ -87,25 +87,48 @@ const Report = {
     L.push(`[${CONFIG.churchName} 주간 예배 출석 리포트]`);
     L.push(`기간: ${this.periodText(r)}`);
     L.push('');
-    L.push(`■ ${CONFIG.mileageUnit}회 단위 달성자 (${r.achievers.length}건)`);
-    if (!r.achievers.length) L.push('  - 이번 주 달성자가 없습니다.');
+    L.push(`■ ${CONFIG.mileageUnit}회 마일리지 달성자 (${r.achievers.length}명)`);
+    if (!r.achievers.length) {
+      L.push('  - 이번 주 신규 마일리지 달성자가 없습니다.');
+    }
     r.achievers.forEach((a, i) => {
       const p = a.person;
-      L.push(`${i + 1}) ${unitLabel(p)} ${p.name} (전역 ${p.dischargeDate})${p.discharged ? ' [전역 처리됨]' : ''}`);
-      L.push(`   - 이번 달성: ${a.milestone}회째 (현재 누적 ${a.total}회)`);
-      L.push(`   - 마일리지 지급(건의) 완료: ${a.grantedBlocks}회 / 지급 대상: ${a.earnedBlocks}회 / 미지급: ${a.pendingBlocks}회`);
-      if (a.block.length) L.push(`   - 이번 ${CONFIG.mileageUnit}회 기간: ${a.block[0].date} ~ ${a.block[a.block.length - 1].date}`);
-      L.push(`   - 첨부 사진: ${a.block.filter(b => b.hasPhoto).length}장` +
-        (a.missing ? ` (시스템 도입 전 기록 ${a.missing}회는 사진 없음)` : '') +
-        (a.block.some(b => b.manual) ? ` (수동 보정 ${a.block.filter(b => b.manual).length}회 포함)` : ''));
-      a.block.filter(b => b.manual).forEach(b => L.push(`     · 수동 보정 ${b.date}: ${b.reason}`));
-      L.push(`   - 전체 예배 날짜(${a.allDates.length}회 기록${p.baseCount ? `, 도입 전 ${p.baseCount}회 별도` : ''}):`);
-      for (let j = 0; j < a.allDates.length; j += 6) L.push('     ' + a.allDates.slice(j, j + 6).join(', '));
+      const photoAtts = a.block.filter(b => b.hasPhoto);
+      const manualAtts = a.block.filter(b => !b.hasPhoto);
+      const preCount = (a.missing || 0) + manualAtts.length;
+
+      L.push(`--------------------------------------------------`);
+      L.push(`${i + 1}) [${unitLabel(p)}] ${p.name} (전역: ${p.dischargeDate || '미기입'})${p.discharged ? ' [전역 처리]' : ''}`);
+      L.push(`   · 마일리지 달성: ${a.milestone}회차 달성 (총 누적 출석: ${a.total}회)`);
+      L.push(`   · 마일리지 포상 건의: ${a.pendingBlocks > 0 ? '신규 대상 (' + a.pendingBlocks + '건 건의 필요)' : '기존 건의 완료'}`);
+
+      // 사진촬영 전 출석 명확 분리 표기
+      if (preCount > 0) {
+        L.push(`   · -사진촬영 전 출석-: 총 ${preCount}회`);
+        if (a.missing > 0) {
+          L.push(`     - 전산화 이전 수기 명부 확인: ${a.missing}회`);
+        }
+        if (manualAtts.length > 0) {
+          L.push(`     - 수기 입력(사진 미촬영): ${manualAtts.length}회 (${manualAtts.map(b => b.date).join(', ')})`);
+          manualAtts.forEach(b => {
+            if (b.reason) L.push(`       ※ 사유: ${b.reason}`);
+          });
+        }
+      }
+
+      // 사진 인증 출석 분리 표기
+      L.push(`   · [사진 인증 출석]: 총 ${photoAtts.length}회 (인증 사진 ${photoAtts.length}장 개별 첨부)`);
+      if (photoAtts.length > 0) {
+        L.push(`     - 사진 인증 일자: ${photoAtts.map(b => b.date).join(', ')}`);
+      }
+      L.push(`   · 이번 24회 구간: ${a.block.length ? (a.block[0].date + ' ~ ' + a.block[a.block.length - 1].date) : '도입 전 수기 출석'}`);
+      L.push(`--------------------------------------------------`);
       L.push('');
     });
+
     if (r.warnings && r.warnings.length) {
       L.push(`■ [경고-확인필요] 이번 주 중복 의심 (${r.warnings.length}건)`);
-      r.warnings.forEach(w => L.push(`  - ${w.date} ${w.unitLabel} ${w.name}: ${w.detail}${w.resolved ? ` → 확인 완료(${w.memo || ''})` : ''}`));
+      r.warnings.forEach(w => L.push(`  - ${w.date} ${w.unitLabel} ${w.name}: ${w.detail}${w.resolved ? ' → 확인 완료(' + (w.memo || '') + ')' : ''}`));
       L.push('');
     }
     L.push('■ 부대별 출석 현황');
@@ -117,5 +140,5 @@ const Report = {
       L.push(`  전체 | ${s.totals.join(' | ')} | ${s.totals.reduce((a, b) => a + b, 0)}`);
     }
     return L.join('\n');
-  },
+  }
 };
