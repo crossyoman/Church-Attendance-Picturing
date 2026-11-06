@@ -116,7 +116,13 @@ const App = {
       if (c) c.textContent = `${d.getMonth() + 1}월 ${d.getDate()}일 (${WEEK[d.getDay()]}) ${fmtTime(d)}`;
     };
     tick(); this.clockTimer = setInterval(tick, 10000);
-    $('#home').onclick = () => { Sound.unlock(); this.units(); };
+    $('#home').onclick = async () => {
+      Sound.unlock();
+      if (!(await Store.isDeviceAuthorized())) {
+        return Modal.alert('⛔ <b>출석체크 불가 안내</b><br><br>천군교회 예배당에 설치된 <b>공식 출석 단말기(공기계)</b>에서만 출석이 가능합니다.<br>개인 스마트폰으로는 출석체크를 진행할 수 없습니다.<br><br><span class="muted small">(예배당 공기계라면 우측 하단 [목사님 전용] 메뉴에서 단말기를 승인해 주세요)</span>');
+      }
+      this.units();
+    };
     $('#pastor-btn').onclick = e => { e.stopPropagation(); this.adminLogin(); };
   },
 

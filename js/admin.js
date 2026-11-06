@@ -568,6 +568,15 @@ const Admin = {
           <button class="btn primary" ${apiUrl ? '' : 'disabled'}>백엔드 비밀번호 변경</button>
         </form>
       </div>
+      <div class="card"><h3>📱 예배당 출석 단말기(공기계) 승인</h3>
+        <p class="hint">외부 용사들이 사이트 주소를 알아내 자기 스마트폰에서 부정 출석하는 것을 막기 위해, <b>목사님이 승인한 예배당 공기계에서만 출석체크가 가능</b>합니다.</p>
+        <div style="margin-top:.8rem;padding:.8rem;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;font-size:1rem;font-weight:700">
+          단말기 상태: <span id="kiosk-status">${s.isKioskAuthorized ? '🟢 예배당 공식 출석 단말기로 승인됨 (출석 가능)' : '🔴 미승인 기기 (외부 접속 차단 상태: 출석 불가)'}</span>
+        </div>
+        <div class="row" style="margin-top:.8rem">
+          <button class="btn primary" id="kiosk-auth-btn">${s.isKioskAuthorized ? '🚫 단말기 승인 해제 (개인 조회 전용 모드로 변경)' : '📱 이 기기를 예배당 출석 단말기로 승인하기'}</button>
+        </div>
+      </div>
       <div class="card"><h3>📧 이메일</h3>
         <form class="mform" id="ef">
           <label>리포트 받는 이메일 <input type="email" id="ef-a" value="${esc(s.adminEmail)}" required></label>
@@ -720,6 +729,20 @@ const Admin = {
         Modal.close(w);
         await Modal.alert('복원 실패: ' + esc(err.message));
       }
+    };
+
+        $('#kiosk-auth-btn').onclick = async () => {
+      const cur = await Store.isDeviceAuthorized();
+      if (!cur) {
+        if (!await Modal.confirm('이 기기를 <b>천군교회 예배당 공식 출석 단말기</b>로 승인할까요?<br>승인된 기기에서만 용사들이 출석체크를 진행할 수 있습니다.', '단말기 승인')) return;
+        await Store.setDeviceAuthorized(true);
+        await Modal.alert('✅ 이 기기가 예배당 공식 출석 단말기로 승인되었습니다!<br>이제 첫 화면 터치 시 정상적으로 출석체크가 진행됩니다.');
+      } else {
+        if (!await Modal.confirm('이 기기의 단말기 승인을 해제할까요?<br>해제 시 이 기기에서는 출석체크가 차단됩니다. (목사님 PC 등 관리용 모드)', '승인 해제')) return;
+        await Store.setDeviceAuthorized(false);
+        await Modal.alert('단말기 승인이 해제되었습니다.');
+      }
+      this.render();
     };
 
     $('#ef').onsubmit = async e => {

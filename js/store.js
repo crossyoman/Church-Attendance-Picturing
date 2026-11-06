@@ -54,6 +54,19 @@ const Store = {
     await Backend.ensureBackendAuth();
   },
 
+  /* ---------- 기기 승인 (예배당 공기계 잠금) ---------- */
+  async isDeviceAuthorized() {
+    const s = await DB.get('settings', 'main');
+    return !!(s && s.isKioskAuthorized);
+  },
+  async setDeviceAuthorized(auth) {
+    const s = await this.settings();
+    s.isKioskAuthorized = !!auth;
+    s.kioskAuthorizedAt = auth ? Date.now() : null;
+    await DB.put('settings', s, 'main');
+    return s;
+  },
+
   /* ---------- 설정 ---------- */
   async settings() {
     const s = await DB.get('settings', 'main');
@@ -62,6 +75,7 @@ const Store = {
       adminEmail: CONFIG.defaultAdminEmail,
       senderEmail: CONFIG.defaultSenderEmail,
       apiUrl: CONFIG.defaultApiUrl || '',
+      isKioskAuthorized: false,
     }, s || {});
   },
   async saveSettings(patch, syncServer = true) {
