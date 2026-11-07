@@ -100,9 +100,9 @@ const Admin = {
         <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (24회 달성자 + 인증사진)</button>
         <button class="btn ghost" id="copy">📋 본문 복사</button>
       </div>
-      <div class="note">${isConn
-        ? `✅ <b>백엔드 서버 연결됨</b>: 매주 일요일 13:00에 <b>${esc(s.senderEmail)}</b>에서 <b>${esc(s.adminEmail)}</b>으로 주간 리포트 + 24회 인증 사진(개별 첨부)이 자동 발송됩니다.<br>지금 바로 발송하려면 <b>‘🚀 서버에서 즉시 메일 발송’</b>을 눌러 주세요.`
-        : `⚠️ 아직 백엔드 서버 URL이 입력되지 않았습니다. <b>⚙️ 설정</b> 탭에서 Google Apps Script 웹앱 주소를 입력하면 매주 일요일 13:00 자동 메일 발송이 활성화됩니다.<br>지금은 ‘기기 메일 앱으로 보내기’로 공기계의 Gmail(${esc(s.senderEmail)})에서 보낼 수 있어요.`}</div>
+      <div class="note" style="line-height:1.6">
+        💡 <b>리포트 메일 발송 안내</b>: 일요일 예배 후 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면 기기/데스크탑의 메일(Gmail) 앱이 열리며 <b>24회 달성자 명단(사진촬영 전 출석 분리 표기)과 인증 사진이 개별 첨부</b>되어 발송됩니다.
+      </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
     $('#cut').onchange = e => { this.reportCut = e.target.value; this.render(); };
 
@@ -134,43 +134,12 @@ const Admin = {
 
     for (const el of $$('.thumbs', $('#rep'))) await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
 
-    $$('[data-server-share]').forEach(b => b.onclick = async () => {
-      if (!isConn) return Modal.alert('먼저 ⚙️ 설정 탭에서 백엔드 서버 URL을 연결해 주세요.');
-      const a = r.achievers[+b.dataset.serverShare];
-      b.disabled = true; b.textContent = '발송 중…';
-      try {
-        const res = await Backend.sendWeeklyReportNow(cut, `${a.person.id}_${a.milestone}`);
-        await Modal.alert(`<b>${esc(a.person.name)}</b> 형제의 리포트와 사진(${res.photoCount}장)을 <b>${esc(res.to)}</b>으로 발송했습니다.`);
-      } catch (e) {
-        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
-      } finally {
-        b.disabled = false; b.textContent = '🚀 서버로 이 형제만 발송';
-      }
-    });
     $$('[data-share]').forEach(b => b.onclick = async () => {
       const a = r.achievers[+b.dataset.share];
       const one = { ...r, achievers: [a] };
       await shareReport(`${title} - ${a.person.name}`, Report.text(one), await photoFiles(a.block));
     });
     $$('[data-dl]').forEach(b => b.onclick = async () => downloadFiles(await photoFiles(r.achievers[+b.dataset.dl].block)));
-    $('#server-send-all').onclick = async () => {
-      if (!isConn) {
-        if (await Modal.confirm('아직 백엔드 서버가 연결되지 않았습니다.<br>⚙️ 설정 탭으로 이동해 서버를 연결할까요?', '설정으로 이동', '취소')) {
-          this.open('settings');
-        }
-        return;
-      }
-      const btn = $('#server-send-all');
-      btn.disabled = true; btn.textContent = '🚀 서버에서 발송 중…';
-      try {
-        const res = await Backend.sendWeeklyReportNow(cut);
-        await Modal.alert(`주간 리포트 메일을 성공적으로 발송했습니다!<br>· 수신: <b>${esc(res.to)}</b><br>· 달성자: <b>${res.achieverCount}건</b> (첨부 사진 ${res.photoCount}장)`);
-      } catch (e) {
-        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
-      } finally {
-        btn.disabled = false; btn.textContent = '🚀 서버에서 즉시 메일 발송';
-      }
-    };
     $('#share-all').onclick = async () => {
       const files = [];
       for (const a of r.achievers) files.push(...await photoFiles(a.block));
@@ -268,17 +237,35 @@ const Admin = {
     draw();
   },
 
-  memberForm(m) {
+  async memberForm(m) {
     const v = m || {};
-    const w = Modal.open(`<h3>${m ? '형제 정보 수정' : '형제 추가'}</h3>
+    const grants = m ? await Store.grantsOf(m.id) : [];
+    const slots = Store.getMemberSlots(v, grants);
+    const w = Modal.open(`<h3>${m ? '형제 정보 및 마일리지 수정' : '형제 추가'}</h3>
       <form class="mform" id="mf">
-        <label>소속 ${this.unitSelect('mf-unit', false, m ? `${m.unit}|${m.company || ''}` : '')}</label>
-        <label>이름 <input id="mf-name" value="${esc(v.name || '')}" required></label>
-        <label>전역일 <input id="mf-dc" type="date" value="${v.dischargeDate || ''}" required></label>
-        <fieldset><legend>시스템 도입 전 기록 (없으면 0)</legend>
-          <label>기존 누적 출석횟수 <input id="mf-bc" type="number" min="0" value="${v.baseCount || 0}"></label>
-          <label>기존 마일리지 지급횟수 <input id="mf-bg" type="number" min="0" value="${v.baseGrantedBlocks || 0}"></label>
-          <label>기존 마지막 출석일 <input id="mf-bl" type="date" value="${v.baseLastDate || ''}"></label>
+        <div class="two">
+          <label>소속 ${this.unitSelect('mf-unit', false, m ? `${m.unit}|${m.company || ''}` : '')}</label>
+          <label>이름 <input id="mf-name" value="${esc(v.name || '')}" required></label>
+        </div>
+        <div class="two">
+          <label>전역일 <input id="mf-dc" type="date" value="${v.dischargeDate || ''}" required></label>
+          <label>사진촬영 전 누적 출석횟수 <input id="mf-bc" type="number" min="0" value="${v.baseCount || 0}"></label>
+        </div>
+        <label>사진촬영 전 마지막 출석일 (선택) <input id="mf-bl" type="date" value="${v.baseLastDate || ''}"></label>
+        <fieldset style="margin-top:.4rem">
+          <legend>🎖 마일리지 1~5차 (24~120회) 기준일 · 건의일</legend>
+          <p class="hint" style="margin:0 0 .5rem">예: 26-02-01 또는 달력 선택 → 표에는 <b>26.02.01</b> 형식으로 표시됩니다.</p>
+          ${slots.map(sl => `
+            <div class="slot-grid">
+              <div class="slot-title">${sl.stage}차 (${sl.count}회)</div>
+              <label style="margin:0;font-size:.82rem">기준일(예배일)
+                <input type="date" data-slot-base="${sl.stage}" value="${sl.baseDate || ''}">
+              </label>
+              <label style="margin:0;font-size:.82rem">건의일(부대건의)
+                <input type="date" data-slot-prop="${sl.stage}" value="${sl.proposedDate || ''}">
+              </label>
+            </div>
+          `).join('')}
         </fieldset>
         <div class="modal-actions">
           ${m ? '<button type="button" class="btn danger" id="mf-del">삭제</button>' : ''}
@@ -294,11 +281,28 @@ const Admin = {
       e.preventDefault();
       const uv = $('#mf-unit', w).value;
       if (!uv) return Modal.alert('소속을 선택해 주세요.');
+      const newSlots = [1, 2, 3, 4, 5].map(st => ({
+        stage: st,
+        count: st * CONFIG.mileageUnit,
+        baseDate: $(`[data-slot-base="${st}"]`, w).value,
+        proposedDate: $(`[data-slot-prop="${st}"]`, w).value,
+      }));
+      const normSlots = Store.normalizeSlots(newSlots);
       const data = {
-        ...this.parseUnit(uv), name: $('#mf-name', w).value.replace(/\s/g, ''), dischargeDate: $('#mf-dc', w).value,
-        baseCount: +$('#mf-bc', w).value || 0, baseGrantedBlocks: +$('#mf-bg', w).value || 0, baseLastDate: $('#mf-bl', w).value || null,
+        ...this.parseUnit(uv),
+        name: $('#mf-name', w).value.replace(/\s/g, ''),
+        dischargeDate: $('#mf-dc', w).value,
+        baseCount: +$('#mf-bc', w).value || 0,
+        baseGrantedBlocks: normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0),
+        baseLastDate: $('#mf-bl', w).value || null,
+        mileageSlots: normSlots,
       };
-      if (m) await Store.updateMember(m.id, data); else await Store.addMember(data);
+      if (m) {
+        await Store.updateMember(m.id, data);
+        await Store.saveMemberSlots(m.id, normSlots);
+      } else {
+        await Store.addMember(data);
+      }
       Modal.close(w); this.render();
     };
   },
@@ -368,82 +372,178 @@ const Admin = {
     });
   },
 
-  /* ===================== 마일리지 ===================== */
+  /* ===================== 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ===================== */
   async tab_mileage(body) {
     const U = CONFIG.mileageUnit;
     const [ms, grants] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
     const G = {};
     grants.forEach(g => (G[g.memberId] = G[g.memberId] || []).push(g));
-    const rows = ms.map(m => {
+
+    const allRows = ms.map(m => {
+      const slots = Store.getMemberSlots(m, G[m.id]);
       const upTo = Store.grantedUpTo(m, G[m.id]);
-      const earned = Math.floor(m.total / U), granted = Math.floor(upTo / U);
-      return { m, upTo, earned, granted, pending: Math.max(0, earned - granted) };
+      const earned = Math.min(5, Math.floor(m.total / U));
+      const granted = slots.filter(sl => sl.proposedDate || sl.baseDate).length;
+      const pending = Math.max(0, earned - granted);
+      return { m, slots, upTo, earned, granted, pending };
     }).sort((a, b) => b.pending - a.pending || unitOrder(unitLabel(a.m)) - unitOrder(unitLabel(b.m)) || koSort(a.m, b.m));
-    const byId = Object.fromEntries(ms.map(m => [m.id, m]));
 
     body.innerHTML = `
-      <div class="note">예배 ${U}회 = 마일리지(휴가) 1일. ‘지급 기록’은 부대에 마일리지를 건의한 날짜와, 몇 회차까지의 출석에 대해 건의했는지를 남깁니다.</div>
-      <div class="toolbar"><label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미지급자만 보기</label></div>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>소속</th><th>이름</th><th>누적</th><th>지급 대상</th><th>지급 완료</th><th>미지급</th><th>마지막 건의</th><th></th></tr></thead>
-      <tbody>${rows.filter(r => !this.onlyPending || r.pending).map(r => {
-        const last = (G[r.m.id] || []).sort((a, b) => b.proposedDate.localeCompare(a.proposedDate))[0];
-        return `<tr><td>${esc(unitLabel(r.m))}</td><td><b>${esc(r.m.name)}</b></td><td>${r.m.total}</td><td>${r.earned}회</td><td>${r.granted}회</td>
-          <td>${r.pending ? `<b class="red">${r.pending}회</b>` : '0'}</td><td>${last ? `${last.proposedDate} (~${last.uptoCount}회)` : (r.m.baseGrantedBlocks ? '도입 전' : '-')}</td>
-          <td><button class="btn small" data-grant="${r.m.id}">지급 기록</button></td></tr>`;
-      }).join('')}</tbody></table></div>
-      <h3>마일리지 건의(지급) 이력</h3>
-      ${grants.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>건의일</th><th>소속 · 이름</th><th>해당 회차</th><th>휴가</th><th>메모</th><th></th></tr></thead>
-        <tbody>${grants.sort((a, b) => b.proposedDate.localeCompare(a.proposedDate) || b.createdAt - a.createdAt).map(g => {
-          const m = byId[g.memberId];
-          return `<tr><td>${g.proposedDate}</td><td>${esc(m ? unitLabel(m) + ' ' + m.name : g.memberName || '')}</td>
-            <td>${g.fromCount}~${g.uptoCount}회</td><td>${g.days}일</td><td>${esc(g.memo || '')}</td>
-            <td><button class="btn small danger" data-gdel="${g.id}">삭제</button></td></tr>`;
-        }).join('')}</tbody></table></div>` : '<p class="muted">아직 기록이 없습니다.</p>'}`;
+      <div class="note">
+        예배 <b>${U}회</b> 달성마다 마일리지(1~5차: 24회·48회·72회·96회·120회) <b>기준일(예배 달성일)</b>과 <b>건의일(부대 건의일)</b>을 기록·관리합니다.<br>
+        날짜는 <code>26.02.01</code> 형식으로 표시되며, <b>[건의 입력/수정]</b>을 눌러 차수별 기준일과 건의일을 언제든 등록·수정할 수 있습니다.
+      </div>
+      <div class="toolbar">
+        ${this.unitSelect('mil-unit', true, this.milUnit || '')}
+        <input id="mil-q" placeholder="이름 검색" value="${esc(this.milQ || '')}" style="max-width:160px">
+        <label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미건의 대상자만 보기</label>
+        <label><input type="checkbox" id="only-earned" ${this.onlyEarned ? 'checked' : ''}> 24회 이상자만 보기</label>
+        <button class="btn ghost small" id="mil-xl">📊 마일리지 표 엑셀 다운로드</button>
+      </div>
+      <div id="mil-table-wrap"></div>`;
 
-    $('#only-pending').onchange = e => { this.onlyPending = e.target.checked; this.render(); };
-    $$('[data-gdel]').forEach(b => b.onclick = async () => {
-      if (!await Modal.confirm('이 건의 기록을 삭제할까요?', '삭제')) return;
-      await Store.deleteGrant(b.dataset.gdel); this.render();
-    });
-    $$('[data-grant]').forEach(b => b.onclick = () => {
-      const r = rows.find(x => x.m.id === b.dataset.grant);
-      const def = Math.max(r.earned * U, r.upTo + U);
-      const w = Modal.open(`<h3>${esc(unitLabel(r.m))} ${esc(r.m.name)} · 마일리지 건의 기록</h3>
-        <p class="modal-msg small">현재 누적 ${r.m.total}회 · 지급 완료 ${r.upTo}회차까지</p>
-        <form class="mform" id="gf">
-          <label>부대에 건의한 날짜 <input type="date" id="gf-d" value="${todayStr()}" required></label>
-          <label>몇 회차 출석까지 건의했나요? <input type="number" id="gf-u" min="${r.upTo + U}" step="${U}" value="${def}" required></label>
-          <p class="hint" id="gf-info"></p>
-          <label>메모 <input id="gf-memo" placeholder="예) 인사과 OOO 중사에게 전달"></label>
-          <div class="modal-actions"><button type="button" class="btn ghost" id="gf-c">취소</button><button class="btn primary" type="submit">저장</button></div>
-        </form>`, 'wide');
-      const info = () => {
-        const u = +$('#gf-u', w).value || 0;
-        const days = Math.floor((u - r.upTo) / U);
-        $('#gf-info', w).innerHTML = `${r.upTo + 1}회 ~ ${u}회 → 휴가 <b>${days}일</b>` + (u > r.m.total ? ' <span class="red">(현재 누적보다 많아요!)</span>' : '');
-      };
-      $('#gf-u', w).oninput = info; info();
-      $('#gf-c', w).onclick = () => Modal.close(w);
-      $('#gf', w).onsubmit = async e => {
-        e.preventDefault();
-        const u = +$('#gf-u', w).value;
-        if (u <= r.upTo || (u - r.upTo) % U) return Modal.alert(`${r.upTo + U}, ${r.upTo + 2 * U} … 처럼 ${U}의 배수로 입력해 주세요.`);
-        await Store.addGrant({
-          memberId: r.m.id, memberName: r.m.name, unitLabel: unitLabel(r.m),
-          proposedDate: $('#gf-d', w).value, fromCount: r.upTo + 1, uptoCount: u, days: (u - r.upTo) / U, memo: $('#gf-memo', w).value.trim(),
-        });
-        Modal.close(w); this.render();
-      };
-    });
+    const drawTable = () => {
+      this.milUnit = $('#mil-unit').value;
+      this.milQ = $('#mil-q').value.trim();
+      this.onlyPending = $('#only-pending').checked;
+      this.onlyEarned = $('#only-earned').checked;
+
+      const filtered = allRows.filter(r => {
+        if (this.milUnit && `${r.m.unit}|${r.m.company || ''}` !== this.milUnit) return false;
+        if (this.milQ && !r.m.name.includes(this.milQ)) return false;
+        if (this.onlyPending && !r.pending) return false;
+        if (this.onlyEarned && r.m.total < U && !r.granted) return false;
+        return true;
+      });
+
+      $('#mil-table-wrap').innerHTML = `
+        <p class="muted" style="margin:.4rem 0">총 ${filtered.length}명 (미건의 대상: <b class="red">${filtered.filter(x => x.pending > 0).length}명</b>)</p>
+        <div class="tbl-wrap">
+          <table class="mil-tbl">
+            <thead>
+              <tr>
+                <th rowspan="2" class="mil-base-th">소속</th>
+                <th rowspan="2" class="mil-base-th">이름</th>
+                <th rowspan="2" class="mil-base-th">전역일</th>
+                <th rowspan="2" class="mil-base-th">누적출석</th>
+                <th rowspan="2" class="mil-base-th">상태</th>
+                <th colspan="2" class="mil-stage-th">24회</th>
+                <th colspan="2" class="mil-stage-th">48회</th>
+                <th colspan="2" class="mil-stage-th">72회</th>
+                <th colspan="2" class="mil-stage-th">96회</th>
+                <th colspan="2" class="mil-stage-th">120회</th>
+                <th rowspan="2" class="mil-base-th">관리</th>
+              </tr>
+              <tr>
+                <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+                <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+                <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+                <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+                <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filtered.length ? filtered.map(r => `
+                <tr>
+                  <td>${esc(unitLabel(r.m))}</td>
+                  <td><b>${esc(r.m.name)}</b></td>
+                  <td>${fmtYYMMDD(r.m.dischargeDate)}</td>
+                  <td><b>${r.m.total}회</b></td>
+                  <td>${r.pending ? `<span class="badge" style="background:#dc2626;color:#fff">미건의 ${r.pending}건</span>` : (r.granted ? `<span class="badge" style="background:#16a34a;color:#fff">${r.granted}차 완료</span>` : '<span class="muted">-</span>')}</td>
+                  ${r.slots.map(sl => {
+                    const isAchievedPending = r.m.total >= sl.count && !sl.proposedDate && !sl.baseDate;
+                    const dispBase = fmtYYMMDD(sl.baseDate || (isAchievedPending ? sl.achievedDate : ''));
+                    const dispProp = fmtYYMMDD(sl.proposedDate);
+                    return `
+                      <td class="mil-date-cell ${isAchievedPending ? 'mil-pending-cell' : ''}" title="${sl.stage}차(${sl.count}회) 기준일">${dispBase || ''}</td>
+                      <td class="mil-date-cell ${isAchievedPending ? 'mil-pending-cell' : ''}" title="${sl.stage}차(${sl.count}회) 건의일">${dispProp || (isAchievedPending ? '<span style="font-size:.75rem;color:#dc2626">미건의</span>' : '')}</td>
+                    `;
+                  }).join('')}
+                  <td><button class="btn small primary" data-grant="${r.m.id}">건의 입력/수정</button></td>
+                </tr>
+              `).join('') : '<tr><td colspan="16" class="muted" style="padding:1.5rem">조건에 해당하는 형제가 없습니다.</td></tr>'}
+            </tbody>
+          </table>
+        </div>`;
+
+      $$('[data-grant]', $('#mil-table-wrap')).forEach(b => b.onclick = () => {
+        const r = allRows.find(x => x.m.id === b.dataset.grant);
+        if (r) this.openMileageModal(r);
+      });
+    };
+
+    $('#mil-unit').onchange = drawTable;
+    $('#mil-q').oninput = drawTable;
+    $('#only-pending').onchange = drawTable;
+    $('#only-earned').onchange = drawTable;
+    $('#mil-xl').onclick = () => this.exportExcel();
+    drawTable();
   },
 
-  /* ===================== 엑셀 일괄 등록 ===================== */
+  openMileageModal(r) {
+    const U = CONFIG.mileageUnit;
+    const w = Modal.open(`
+      <h3>🎖 ${esc(unitLabel(r.m))} ${esc(r.m.name)} · 마일리지 1~5차 기준일/건의일 등록</h3>
+      <p class="modal-msg small">
+        현재 누적 출석: <b>${r.m.total}회</b> (도입 전 ${r.m.baseCount || 0}회 + 사진/시스템 ${r.m.atts.length}회)<br>
+        달성된 회차의 기준일과 부대 건의일을 입력해 주세요. (예: <code>26-2-1</code> 또는 달력 선택 → 표에는 <b>26.02.01</b>로 표시)
+      </p>
+      <form class="mform" id="gf">
+        ${r.slots.map(sl => {
+          const isReached = r.m.total >= sl.count;
+          const autoBase = sl.baseDate || (isReached ? sl.achievedDate : '');
+          const autoProp = sl.proposedDate || (isReached && !sl.proposedDate && autoBase ? todayStr() : '');
+          return `
+            <div class="slot-grid ${isReached ? 'achieved' : ''}">
+              <div>
+                <div class="slot-title">${sl.stage}차 (${sl.count}회)</div>
+                <div style="font-size:.75rem;color:${isReached ? '#b45309' : '#64748b'}">${isReached ? '✔ 달성됨' : '미달성'}</div>
+              </div>
+              <label style="margin:0;font-size:.82rem">
+                ${sl.stage}차 기준일 (예배 기준)
+                <input type="date" data-s-base="${sl.stage}" value="${autoBase || ''}">
+              </label>
+              <label style="margin:0;font-size:.82rem">
+                ${sl.stage}차 건의일 (부대 건의)
+                <input type="date" data-s-prop="${sl.stage}" value="${autoProp || ''}">
+              </label>
+            </div>
+          `;
+        }).join('')}
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="gf-c">취소</button>
+          <button class="btn primary" type="submit">저장하기</button>
+        </div>
+      </form>`, 'wide');
+
+    $('#gf-c', w).onclick = () => Modal.close(w);
+    $('#gf', w).onsubmit = async e => {
+      e.preventDefault();
+      const updatedSlots = [1, 2, 3, 4, 5].map(st => ({
+        stage: st,
+        count: st * U,
+        baseDate: $(`[data-s-base="${st}"]`, w).value,
+        proposedDate: $(`[data-s-prop="${st}"]`, w).value,
+      }));
+      await Store.saveMemberSlots(r.m.id, updatedSlots);
+      Modal.close(w);
+      this.render();
+    };
+  },
+
+  /* ===================== 엑셀 일괄 등록 (1~5차 기준일·건의일 지원) ===================== */
   async tab_import(body) {
     body.innerHTML = `
-      <div class="card"><h3>엑셀로 형제 명단 한 번에 등록</h3>
-        <ol class="steps"><li>양식을 내려받아 ‘명단’ 시트에 작성합니다.</li><li>아래에서 파일을 선택하면 미리보기가 나옵니다.</li><li>확인 후 ‘등록하기’를 누릅니다. (이미 등록된 형제는 건너뜁니다)</li></ol>
-        <a class="btn ghost" href="templates/명단_일괄등록_양식.xlsx" download>📄 엑셀 양식 내려받기</a>
-        <label class="file-btn btn primary">📂 작성한 엑셀 파일 선택<input type="file" id="xf" accept=".xlsx,.xls,.csv" hidden></label>
+      <div class="card"><h3>📥 엑셀로 형제 명단 및 기존 마일리지(1~5차) 한 번에 등록</h3>
+        <ol class="steps">
+          <li>아래 <b>[📄 엑셀 양식 내려받기]</b>를 눌러 ‘명단’ 시트에 작성합니다.</li>
+          <li><b>24회(1차) ~ 120회(5차)</b>의 <b>기준일</b>(예배 기준일)과 <b>건의일</b>(부대 건의일)을 <code>26.02.01</code> 또는 <code>26-2-1</code> 형식으로 입력하면 그대로 등록됩니다.</li>
+          <li>이미 등록된 형제도 엑셀에 마일리지 기준일/건의일을 적어 다시 올리면 자동으로 업데이트됩니다.</li>
+        </ol>
+        <div class="row">
+          <a class="btn ghost" href="templates/명단_일괄등록_양식.xlsx" download>📄 엑셀 양식 내려받기 (24~120회 기준일·건의일 포함)</a>
+          <label class="file-btn btn primary">📂 작성한 엑셀 파일 선택<input type="file" id="xf" accept=".xlsx,.xls,.csv" hidden></label>
+        </div>
       </div><div id="xprev"></div>`;
     $('#xf').onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
@@ -459,18 +559,51 @@ const Admin = {
   async previewImport(aoa) {
     const hi = aoa.findIndex(r => r.some(c => String(c).includes('이름')));
     if (hi < 0) return Modal.alert('‘이름’ 열을 찾지 못했어요. 양식을 사용해 주세요.');
-    const H = aoa[hi].map(c => String(c));
-    const col = kw => H.findIndex(h => h.includes(kw));
-    const C = { unit: col('소속'), company: col('중대'), name: col('이름'), dc: col('전역'), bc: col('누적'), bg: col('마일리지'), bl: col('마지막') };
+    const H1 = aoa[hi].map(c => String(c).trim());
+    const H2 = (aoa[hi + 1] || []).map(c => String(c).trim());
+    const col = kw => H1.findIndex(h => h.includes(kw));
+    const C = {
+      unit: col('소속'),
+      company: col('중대'),
+      name: col('이름'),
+      dc: col('전역'),
+      bc: col('누적') >= 0 ? col('누적') : col('출석횟수'),
+      bg: col('마일리지'),
+      bl: col('마지막'),
+    };
+
+    // 2행 헤더(24회/48회/72회/96회/120회 아래 기준일/건의일) 여부 판별
+    const hasSubHeader = !String(H2[C.name] || '').trim() && H2.some(c => c.includes('기준일') || c.includes('건의일'));
+    const dataStartIdx = hasSubHeader ? hi + 2 : hi + 1;
+
+    // 1~5차(24, 48, 72, 96, 120회) 기준일/건의일 열 위치 파악
+    const stageCols = {};
+    [1, 2, 3, 4, 5].forEach(st => {
+      const target = st * 24;
+      let baseCol = -1, propCol = -1;
+      if (hasSubHeader) {
+        const topIdx = H1.findIndex(h => h.includes(String(target)) || h.includes(`${st}차`));
+        if (topIdx >= 0) {
+          baseCol = topIdx;
+          propCol = topIdx + 1;
+        }
+      } else {
+        baseCol = H1.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('기준'));
+        propCol = H1.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('건의'));
+      }
+      stageCols[st] = { baseCol, propCol };
+    });
+
     const existing = await Store.membersWithStats();
-    const seen = new Set(existing.map(m => `${m.unit}|${m.company || ''}|${m.name}|${m.dischargeDate}`));
+    const existingKeys = new Set(existing.map(m => `${m.unit}|${m.company || ''}|${m.name}|${m.dischargeDate}`));
+    const seenInFile = new Set();
     const rows = [];
-    aoa.slice(hi + 1).forEach((r, i) => {
+
+    aoa.slice(dataStartIdx).forEach((r, i) => {
       const get = k => (C[k] >= 0 ? r[C[k]] : '');
       const name = String(get('name')).replace(/\s/g, '');
       if (!name) return;
       let unit = String(get('unit')).trim(), company = String(get('company')).trim() || null;
-      // 이전 양식 호환: 8단본부/8단통신, 608수송대대+중대 자동 변환
       if (unit === '8단본부') unit = '단본부';
       if (unit === '8단통신') unit = '단통신';
       if (unit === '608수송대대' && company) {
@@ -479,30 +612,93 @@ const Admin = {
       }
       if (unit === '18보급대대') company = null;
       const u = CONFIG.units.find(x => x.name === unit);
+
+      const mileageSlots = [1, 2, 3, 4, 5].map(st => {
+        const { baseCol, propCol } = stageCols[st];
+        const bDate = baseCol >= 0 ? normalizeDate(r[baseCol]) : '';
+        const pDate = propCol >= 0 ? normalizeDate(r[propCol]) : '';
+        return { stage: st, count: st * 24, baseDate: bDate, proposedDate: pDate };
+      });
+      const slotBlocks = mileageSlots.filter(sl => sl.baseDate || sl.proposedDate).length;
+
       const rec = {
-        line: hi + i + 2, name, unit, company: u && u.companies ? company : null,
-        dischargeDate: normalizeDate(get('dc')), baseCount: parseInt(get('bc')) || 0,
-        baseGrantedBlocks: parseInt(get('bg')) || 0, baseLastDate: normalizeDate(get('bl')) || null,
+        line: dataStartIdx + i + 1,
+        name,
+        unit,
+        company: u && u.companies ? company : null,
+        dischargeDate: normalizeDate(get('dc')),
+        baseCount: parseInt(get('bc')) || 0,
+        baseGrantedBlocks: Math.max(parseInt(get('bg')) || 0, slotBlocks),
+        baseLastDate: normalizeDate(get('bl')) || null,
+        mileageSlots,
       };
+      const key = `${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`;
       let err = '';
       if (!u) err = '소속부대 이름이 올바르지 않음';
       else if (u.companies && !u.companies.includes(company)) err = `중대를 선택해야 함 (${u.companies.join('/')})`;
       else if (!rec.dischargeDate) err = '전역일 형식 오류';
       else if (rec.dischargeDate < todayStr()) err = '이미 전역함';
-      else if (seen.has(`${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`)) err = '이미 등록됨 (건너뜀)';
-      if (!err) seen.add(`${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`);
-      rec.err = err; rows.push(rec);
+      else if (seenInFile.has(key)) err = '엑셀 파일 내 중복 행';
+      if (!err) seenInFile.add(key);
+      rec.isUpdate = !err && existingKeys.has(key);
+      rec.err = err;
+      rows.push(rec);
     });
+
     const ok = rows.filter(r => !r.err);
-    $('#xprev').innerHTML = `<h3>미리보기 · 등록 가능 ${ok.length}명 / 제외 ${rows.length - ok.length}명</h3>
-      <button class="btn primary" id="xgo" ${ok.length ? '' : 'disabled'}>✔ ${ok.length}명 등록하기</button>
-      <div class="tbl-wrap"><table class="tbl"><thead><tr><th>행</th><th>소속</th><th>이름</th><th>전역일</th><th>도입 전 출석</th><th>도입 전 지급</th><th>마지막 출석</th><th>상태</th></tr></thead>
-      <tbody>${rows.map(r => `<tr class="${r.err ? 'bad' : ''}"><td>${r.line}</td><td>${esc(r.unit)} ${esc(r.company || '')}</td><td>${esc(r.name)}</td><td>${r.dischargeDate}</td>
-        <td>${r.baseCount}</td><td>${r.baseGrantedBlocks}</td><td>${r.baseLastDate || '-'}</td><td>${r.err ? esc(r.err) : '✅'}</td></tr>`).join('')}</tbody></table></div>`;
+    const newCnt = ok.filter(r => !r.isUpdate).length;
+    const updCnt = ok.filter(r => r.isUpdate).length;
+
+    $('#xprev').innerHTML = `
+      <h3>미리보기 · 반영 가능 ${ok.length}명 (신규 ${newCnt}명 / 기존 업데이트 ${updCnt}명) · 제외 ${rows.length - ok.length}명</h3>
+      <button class="btn primary" id="xgo" ${ok.length ? '' : 'disabled'}>✔ ${ok.length}명 일괄 반영하기</button>
+      <div class="tbl-wrap" style="margin-top:.8rem">
+        <table class="mil-tbl">
+          <thead>
+            <tr>
+              <th rowspan="2" class="mil-base-th">행</th>
+              <th rowspan="2" class="mil-base-th">소속</th>
+              <th rowspan="2" class="mil-base-th">이름</th>
+              <th rowspan="2" class="mil-base-th">전역일</th>
+              <th rowspan="2" class="mil-base-th">기존출석</th>
+              <th colspan="2" class="mil-stage-th">24회</th>
+              <th colspan="2" class="mil-stage-th">48회</th>
+              <th colspan="2" class="mil-stage-th">72회</th>
+              <th colspan="2" class="mil-stage-th">96회</th>
+              <th colspan="2" class="mil-stage-th">120회</th>
+              <th rowspan="2" class="mil-base-th">상태</th>
+            </tr>
+            <tr>
+              <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+              <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+              <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+              <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+              <th class="mil-sub-th">기준일</th><th class="mil-sub-th">건의일</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${rows.map(r => `
+              <tr class="${r.err ? 'bad' : ''}">
+                <td>${r.line}</td>
+                <td>${esc(r.unit)} ${esc(r.company || '')}</td>
+                <td><b>${esc(r.name)}</b></td>
+                <td>${fmtYYMMDD(r.dischargeDate)}</td>
+                <td>${r.baseCount}</td>
+                ${r.mileageSlots.map(sl => `
+                  <td class="mil-date-cell">${fmtYYMMDD(sl.baseDate)}</td>
+                  <td class="mil-date-cell">${fmtYYMMDD(sl.proposedDate)}</td>
+                `).join('')}
+                <td>${r.err ? `<span class="red">${esc(r.err)}</span>` : (r.isUpdate ? '🔄 기존 인원 업데이트' : '✅ 신규 등록')}</td>
+              </tr>
+            `).join('')}
+          </tbody>
+        </table>
+      </div>`;
+
     $('#xgo').onclick = async () => {
       await Store.addMembersBatch(ok);
-      await Modal.alert(`${ok.length}명을 등록했습니다.`);
-      this.open('members');
+      await Modal.alert(`총 ${ok.length}명(신규 ${newCnt}명, 업데이트 ${updCnt}명)의 명단 및 마일리지 기록을 반영했습니다.`);
+      this.open('mileage');
     };
   },
 
@@ -794,23 +990,51 @@ const Admin = {
   async exportExcel() {
     if (typeof XLSX === 'undefined') return Modal.alert('엑셀 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');
     const people = await Store.allPeopleFull();
-    const U = CONFIG.mileageUnit;
-    const roster = people.map(p => ({
-      상태: p.discharged ? '전역' : '현역', 소속: unitLabel(p), 이름: p.name, 전역일: p.dischargeDate,
-      누적출석: p.total, 도입전출석: p.baseCount || 0, 지급대상: Math.floor(p.total / U),
-      지급완료: Math.floor(Store.grantedUpTo(p, p.grants) / U), 최근출석: p.last || '',
-    }));
+    // 2행 헤더(24회/48회/72회/96회/120회 -> 기준일/건의일) 양식으로 시트 구성
+    const aoa = [
+      ['상태', '소속부대', '이름', '전역일', '누적출석', '사진촬영전출석', '마지막출석일', '24회', '', '48회', '', '72회', '', '96회', '', '120회', ''],
+      ['', '', '', '', '', '', '', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일'],
+    ];
+    people.forEach(p => {
+      const slots = Store.getMemberSlots(p, p.grants);
+      const row = [
+        p.discharged ? '전역' : '현역',
+        unitLabel(p),
+        p.name,
+        fmtYYMMDD(p.dischargeDate),
+        p.total,
+        p.baseCount || 0,
+        fmtYYMMDD(p.last || ''),
+      ];
+      slots.forEach(sl => {
+        row.push(fmtYYMMDD(sl.baseDate), fmtYYMMDD(sl.proposedDate));
+      });
+      aoa.push(row);
+    });
+    const wsRoster = XLSX.utils.aoa_to_sheet(aoa);
+    wsRoster['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
+      { s: { r: 0, c: 1 }, e: { r: 1, c: 1 } },
+      { s: { r: 0, c: 2 }, e: { r: 1, c: 2 } },
+      { s: { r: 0, c: 3 }, e: { r: 1, c: 3 } },
+      { s: { r: 0, c: 4 }, e: { r: 1, c: 4 } },
+      { s: { r: 0, c: 5 }, e: { r: 1, c: 5 } },
+      { s: { r: 0, c: 6 }, e: { r: 1, c: 6 } },
+      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } },
+      { s: { r: 0, c: 9 }, e: { r: 0, c: 10 } },
+      { s: { r: 0, c: 11 }, e: { r: 0, c: 12 } },
+      { s: { r: 0, c: 13 }, e: { r: 0, c: 14 } },
+      { s: { r: 0, c: 15 }, e: { r: 0, c: 16 } },
+    ];
+
     const att = people.flatMap(p => p.atts.map(a => ({
       날짜: a.date, 요일: weekdayOf(a.date), 시간: a.time, 소속: unitLabel(p), 이름: p.name,
       구분: a.manual ? '수동' : '사진', 사유: a.reason || '', 사진파일명: a.hasPhoto ? a.fileName : '',
     }))).sort((a, b) => (a.날짜 + a.시간).localeCompare(b.날짜 + b.시간));
-    const mil = people.flatMap(p => p.grants.map(g => ({
-      건의일: g.proposedDate, 소속: unitLabel(p), 이름: p.name, 시작회차: g.fromCount, 종료회차: g.uptoCount, 휴가일수: g.days, 메모: g.memo || '',
-    })));
+
     const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(roster), '명단');
+    XLSX.utils.book_append_sheet(wb, wsRoster, '명단_및_마일리지');
     XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(att), '출석기록');
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(mil), '마일리지');
-    XLSX.writeFile(wb, `천군교회_출석기록_${todayStr()}.xlsx`);
+    XLSX.writeFile(wb, `천군교회_마일리지현황_${todayStr()}.xlsx`);
   },
 };

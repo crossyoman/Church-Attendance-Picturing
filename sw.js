@@ -1,7 +1,7 @@
-/* 오프라인 대비 캐시 (항상 최신 파일을 먼저 시도하고, 실패 시 캐시 사용) */
-const CACHE = 'cheongun-v3';
-const ASSETS = ['./', './index.html', './css/style.css', './js/config.js', './js/db.js', './js/api.js', './js/store.js',
-  './js/report.js', './js/camera.js', './js/admin.js', './js/app.js', './manifest.json', './icon.svg'];
+/* 오프라인 캐시 (항상 최신 본을 먼저 시도하고, 안 되면 캐시 사용) */
+const CACHE = 'cheongun-v6';
+const ASSETS = ['./', './index.html', './css/style.css?v=6', './js/config.js?v=6', './js/db.js?v=6', './js/api.js?v=6', './js/store.js?v=6',
+  './js/report.js?v=6', './js/camera.js?v=6', './js/admin.js?v=6', './js/app.js?v=6', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
@@ -13,7 +13,7 @@ self.addEventListener('activate', e => {
 self.addEventListener('fetch', e => {
   if (e.request.method !== 'GET') return;
   e.respondWith(
-    fetch(e.request).then(res => {
+    fetch(e.request, { cache: 'no-cache' }).then(res => {
       const copy = res.clone();
       if (res.ok) caches.open(CACHE).then(c => c.put(e.request, copy));
       return res;

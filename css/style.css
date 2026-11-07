@@ -198,3 +198,17 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
   .home h2 { font-size: 1.3rem; }
   .two { grid-template-columns: 1fr; }
 }
+
+/* 마일리지 1~5차 (24/48/72/96/120회) 기준일·건의일 표 (엑셀 동일 양식) */
+.mil-tbl { border-collapse: collapse; width: 100%; font-size: .88rem; }
+.mil-tbl th, .mil-tbl td { border: 1px solid #444; padding: .42rem .5rem; text-align: center; white-space: nowrap; }
+.mil-tbl thead th.mil-base-th { background: #1f3a5f; color: #fff; font-weight: 700; }
+.mil-tbl thead th.mil-stage-th { background: #ffff00; color: #000; font-weight: 800; font-size: .95rem; border: 1px solid #222; }
+.mil-tbl thead th.mil-sub-th { background: #ffff00; color: #000; font-weight: 700; font-size: .84rem; border: 1px solid #222; min-width: 72px; }
+.mil-tbl tbody tr:hover { background: #f8fafc; }
+.mil-tbl td.mil-date-cell { font-family: 'Malgun Gothic', sans-serif; font-weight: 600; color: #111; min-width: 72px; }
+.mil-tbl td.mil-pending-cell { background: #fff8e1; color: #b45309; font-weight: 700; }
+.slot-grid { display: grid; grid-template-columns: 90px 1fr 1fr; gap: .5rem; align-items: center; padding: .45rem .6rem; border: 1px solid #e2e8f0; border-radius: 8px; background: #f8fafc; margin-bottom: .4rem; }
+.slot-grid.achieved { border-color: #eab308; background: #fefce8; }
+.slot-grid .slot-title { font-weight: 800; color: #1e3a8a; }
+

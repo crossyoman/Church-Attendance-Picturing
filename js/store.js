@@ -44,6 +44,14 @@ function normalizeDate(v) {
   return fmtDate(d);
 }
 
+/** 날짜를 26.02.01 (YY.MM.DD) 형식으로 표기 */
+function fmtYYMMDD(v) {
+  const s = normalizeDate(v);
+  if (!s) return '';
+  const [y, m, d] = s.split('-');
+  return `${y.slice(-2)}.${m}.${d}`;
+}
+
 /* =========================================================
  * Store : 데이터 처리 (로컬 IndexedDB + 백엔드 자동 동기화)
  * ========================================================= */
@@ -138,19 +146,50 @@ const Store = {
       .filter(m => m.unit === unit && (m.company || null) === (company || null) && m.name === name);
   },
 
+  normalizeSlots(slots) {
+    const U = CONFIG.mileageUnit;
+    const out = [];
+    for (let s = 1; s <= 5; s++) {
+      const found = (slots || []).find(x => x && (+x.stage === s || +x.count === s * U)) || {};
+      const baseDate = normalizeDate(found.baseDate);
+      const proposedDate = normalizeDate(found.proposedDate);
+      if (baseDate || proposedDate) {
+        out.push({ stage: s, count: s * U, baseDate, proposedDate, memo: found.memo || '' });
+      }
+    }
+    return out;
+  },
+
   async addMember(p, syncServer = true) {
+    const mileageSlots = this.normalizeSlots(p.mileageSlots);
+    const slotBlocks = mileageSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0);
     const m = {
       id: uid(),
       name: p.name.trim(),
       unit: p.unit,
       company: p.company || null,
       dischargeDate: p.dischargeDate,
-      baseCount: +p.baseCount || 0,             // 시스템 도입 전 출석 횟수
-      baseGrantedBlocks: +p.baseGrantedBlocks || 0, // 시스템 도입 전 마일리지 지급 횟수
-      baseLastDate: p.baseLastDate || null,     // 시스템 도입 전 마지막 출석일
+      baseCount: +p.baseCount || 0,                 // 시스템 도입 전 출석 횟수
+      baseGrantedBlocks: Math.max(+p.baseGrantedBlocks || 0, slotBlocks), // 마일리지 지급 차수
+      baseLastDate: p.baseLastDate || null,         // 시스템 도입 전 마지막 출석일
+      mileageSlots,                                 // 1~5차 (24/48/72/96/120회) 기준일·건의일
       createdAt: todayStr(),
     };
     await DB.put('members', m);
+    for (const sl of mileageSlots) {
+      await this.addGrant({
+        memberId: m.id,
+        memberName: m.name,
+        unitLabel: unitLabel(m),
+        stage: sl.stage,
+        baseDate: sl.baseDate || '',
+        proposedDate: sl.proposedDate || sl.baseDate || todayStr(),
+        fromCount: (sl.stage - 1) * CONFIG.mileageUnit + 1,
+        uptoCount: sl.count,
+        days: 1,
+        memo: sl.memo || `${sl.stage}차(${sl.count}회)`,
+      }, syncServer);
+    }
     if (syncServer && typeof Backend !== 'undefined') {
       await Backend.enqueue('upsertMember', { member: m });
     }
@@ -158,14 +197,43 @@ const Store = {
   },
 
   async addMembersBatch(list) {
-    const created = [];
+    const existing = await DB.all('members');
+    const byKey = {};
+    existing.forEach(m => {
+      byKey[`${m.unit}|${m.company || ''}|${m.name}|${m.dischargeDate}`] = m;
+    });
+    const upserted = [];
     for (const p of list) {
-      created.push(await this.addMember(p, false));
+      const key = `${p.unit}|${p.company || ''}|${p.name}|${p.dischargeDate}`;
+      const ex = byKey[key];
+      if (ex) {
+        const mergedSlots = this.getMemberSlots(ex, await this.grantsOf(ex.id)).map(sl => {
+          const inc = (p.mileageSlots || []).find(x => +x.stage === sl.stage);
+          return {
+            stage: sl.stage,
+            count: sl.count,
+            baseDate: (inc && inc.baseDate) ? normalizeDate(inc.baseDate) : sl.baseDate,
+            proposedDate: (inc && inc.proposedDate) ? normalizeDate(inc.proposedDate) : sl.proposedDate,
+            memo: (inc && inc.memo) || sl.memo || '',
+          };
+        });
+        const normSlots = this.normalizeSlots(mergedSlots);
+        const slotBlocks = normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0);
+        ex.baseCount = p.baseCount !== undefined && p.baseCount !== '' ? (+p.baseCount || 0) : ex.baseCount;
+        if (p.baseLastDate) ex.baseLastDate = p.baseLastDate;
+        ex.mileageSlots = normSlots;
+        ex.baseGrantedBlocks = Math.max(ex.baseGrantedBlocks || 0, +p.baseGrantedBlocks || 0, slotBlocks);
+        await DB.put('members', ex);
+        await this.syncGrantsWithSlots(ex, normSlots, false);
+        upserted.push(ex);
+      } else {
+        upserted.push(await this.addMember(p, false));
+      }
     }
-    if (created.length && typeof Backend !== 'undefined') {
-      await Backend.enqueue('upsertMembersBatch', { members: created });
+    if (upserted.length && typeof Backend !== 'undefined') {
+      await Backend.enqueue('upsertMembersBatch', { members: upserted });
     }
-    return created;
+    return upserted;
   },
 
   async updateMember(id, patch) {
@@ -316,26 +384,131 @@ const Store = {
       .map(a => ({ ...a, member: byId[a.memberId] }));
   },
 
-  /* ---------- 마일리지 ---------- */
+  /* ---------- 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ---------- */
+  getMemberSlots(m, grants = []) {
+    const U = CONFIG.mileageUnit;
+    const atts = (m.atts || []).slice().sort((a, b) => a.ts - b.ts);
+    const baseCount = m.baseCount || 0;
+    const rawSlots = Array.isArray(m.mileageSlots) ? m.mileageSlots : [];
+    const byStage = {};
+    for (let s = 1; s <= 5; s++) {
+      const targetCount = s * U;
+      let achievedDate = '';
+      if (baseCount + atts.length >= targetCount) {
+        const idxInAtts = targetCount - baseCount - 1;
+        if (idxInAtts >= 0 && atts[idxInAtts]) {
+          achievedDate = atts[idxInAtts].date;
+        } else if (m.baseLastDate) {
+          achievedDate = m.baseLastDate;
+        }
+      }
+      byStage[s] = {
+        stage: s,
+        count: targetCount,
+        label: `${targetCount}회`,
+        baseDate: '',
+        proposedDate: '',
+        achievedDate,
+        memo: '',
+        grantId: null,
+      };
+    }
+    rawSlots.forEach(item => {
+      if (!item) return;
+      const st = +item.stage || Math.round((+item.count || 0) / U);
+      if (st >= 1 && st <= 5) {
+        if (item.baseDate) byStage[st].baseDate = normalizeDate(item.baseDate);
+        if (item.proposedDate) byStage[st].proposedDate = normalizeDate(item.proposedDate);
+        if (item.memo) byStage[st].memo = item.memo;
+      }
+    });
+    (grants || []).slice().sort((a, b) => (a.createdAt || 0) - (b.createdAt || 0)).forEach(g => {
+      const st = +g.stage || Math.round((+g.uptoCount || 0) / U);
+      if (st >= 1 && st <= 5) {
+        if (g.baseDate) byStage[st].baseDate = normalizeDate(g.baseDate);
+        if (g.proposedDate) byStage[st].proposedDate = normalizeDate(g.proposedDate);
+        if (g.memo) byStage[st].memo = g.memo;
+        byStage[st].grantId = g.id;
+      }
+    });
+    return [1, 2, 3, 4, 5].map(s => byStage[s]);
+  },
+
   grantedUpTo(m, grants) {
     const U = CONFIG.mileageUnit;
-    return Math.max((m.baseGrantedBlocks || 0) * U, ...(grants || []).map(g => g.uptoCount || 0), 0);
+    const slots = this.getMemberSlots(m, grants);
+    let maxFromSlots = 0;
+    slots.forEach(sl => {
+      if (sl.proposedDate || sl.baseDate) maxFromSlots = Math.max(maxFromSlots, sl.count);
+    });
+    return Math.max((m.baseGrantedBlocks || 0) * U, maxFromSlots, ...(grants || []).map(g => g.uptoCount || 0), 0);
   },
+
   async grantsOf(memberId) { return DB.byIndex('mileage', 'memberId', memberId); },
   async allGrants() { return DB.all('mileage'); },
-  async addGrant(g) {
-    const rec = { id: uid(), createdAt: Date.now(), ...g };
+
+  async addGrant(g, syncServer = true) {
+    const U = CONFIG.mileageUnit;
+    const stage = +g.stage || Math.round((+g.uptoCount || U) / U);
+    const rec = {
+      id: uid(),
+      createdAt: Date.now(),
+      stage,
+      baseDate: normalizeDate(g.baseDate || ''),
+      proposedDate: normalizeDate(g.proposedDate || todayStr()),
+      fromCount: (stage - 1) * U + 1,
+      uptoCount: stage * U,
+      days: 1,
+      ...g,
+    };
     await DB.put('mileage', rec);
-    if (typeof Backend !== 'undefined') {
+    if (syncServer && typeof Backend !== 'undefined') {
       await Backend.enqueue('addGrant', { grant: rec });
     }
     return rec;
   },
-  async deleteGrant(id) {
+
+  async deleteGrant(id, syncServer = true) {
     await DB.del('mileage', id);
-    if (typeof Backend !== 'undefined') {
+    if (syncServer && typeof Backend !== 'undefined') {
       await Backend.enqueue('deleteGrant', { id });
     }
+  },
+
+  async syncGrantsWithSlots(m, normSlots, syncServer = true) {
+    const oldGrants = await this.grantsOf(m.id);
+    for (const g of oldGrants) {
+      await this.deleteGrant(g.id, syncServer);
+    }
+    for (const sl of normSlots) {
+      await this.addGrant({
+        memberId: m.id,
+        memberName: m.name,
+        unitLabel: unitLabel(m),
+        stage: sl.stage,
+        baseDate: sl.baseDate || '',
+        proposedDate: sl.proposedDate || sl.baseDate || todayStr(),
+        fromCount: (sl.stage - 1) * CONFIG.mileageUnit + 1,
+        uptoCount: sl.count,
+        days: 1,
+        memo: sl.memo || `${sl.stage}차(${sl.count}회)`,
+      }, syncServer);
+    }
+  },
+
+  async saveMemberSlots(memberId, slotsInput) {
+    const m = await DB.get('members', memberId);
+    if (!m) return null;
+    const normSlots = this.normalizeSlots(slotsInput);
+    const slotBlocks = normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0);
+    m.mileageSlots = normSlots;
+    m.baseGrantedBlocks = slotBlocks;
+    await DB.put('members', m);
+    await this.syncGrantsWithSlots(m, normSlots, true);
+    if (typeof Backend !== 'undefined') {
+      await Backend.enqueue('upsertMember', { member: m });
+    }
+    return m;
   },
 
   /* ---------- 전역자 ---------- */
