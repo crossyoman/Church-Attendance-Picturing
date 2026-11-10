@@ -88,15 +88,22 @@ const Backend = {
   async call(action, payload = {}, customUrl = null, overridePw = null) {
     const url = (customUrl || await this.getUrl()).trim();
     if (!url) throw new Error('백엔드 서버 URL이 설정되지 않았습니다.');
+    if (url.includes('/home/projects/') || url.endsWith('/edit')) {
+      throw new Error('편집기 주소(/edit)가 입력되었습니다. 우측 상단 [배포] → [새 배포] 후 나오는 /exec 로 끝나는 웹 앱 URL을 입력해 주세요.');
+    }
 
     const backendPassword = overridePw !== null ? overridePw : (this.sessionBackendPw || '');
 
-    const res = await fetch(url, {
-      method: 'POST',
-      headers: { 'Content-Type': 'text/plain;charset=utf-8' },
-      body: JSON.stringify({ action, payload, backendPassword }),
-      redirect: 'follow',
-    });
+    let res;
+    try {
+      res = await fetch(url, {
+        method: 'POST',
+        body: JSON.stringify({ action, payload, backendPassword }),
+        redirect: 'follow',
+      });
+    } catch (fetchErr) {
+      throw new Error('서버 접속 차단(Failed to fetch): Apps Script [배포] 설정에서 [액세스 권한이 있는 사용자]가 반드시 맨 아래 "모든 사용자"로 선택되어 있는지, 그리고 주소 끝이 /exec 로 끝나는지 확인해 주세요.');
+    }
 
     if (!res.ok) {
       throw new Error(`서버 응답 오류 (HTTP ${res.status})`);
