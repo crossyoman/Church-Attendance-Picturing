@@ -143,3 +143,66 @@ const Sound = {
     [523.25, 659.25, 783.99, 1046.5].forEach((f, i) => setTimeout(() => this.beep(f, 0.18), i * 90));
   },
 };
+
+/* =========================================================
+ * 사진/엑셀 파일 변환 · 다운로드 · 메일 앱(공유창) 첨부 도우미
+ * ========================================================= */
+async function photoFiles(atts) {
+  const files = [];
+  const seen = new Set();
+  for (const a of (atts || [])) {
+    if (!a || !a.hasPhoto || seen.has(a.id)) continue;
+    seen.add(a.id);
+    const b = await Store.getPhoto(a.id);
+    if (b) {
+      files.push(new File([b], safeFileName(a.fileName || `${a.date}_${a.time}_${a.memberName || ''}`) + '.jpg', { type: 'image/jpeg' }));
+    }
+  }
+  return files;
+}
+
+function downloadBlob(blob, name) {
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = name;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 4000);
+}
+
+async function downloadFiles(files) {
+  for (const f of (files || [])) {
+    downloadBlob(f, f.name);
+    await sleep(320);
+  }
+}
+
+/** 기기 공유창(Gmail 등)으로 본문 + 엑셀파일 + 사진 전체 일괄 첨부 */
+async function shareReport(title, text, files = []) {
+  const validFiles = (files || []).filter(Boolean);
+  const data = { title, text, files: validFiles };
+  if (navigator.canShare && validFiles.length && navigator.canShare({ files: validFiles })) {
+    try {
+      await navigator.share(data);
+      return true;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;
+    }
+  } else if (navigator.share && !validFiles.length) {
+    try {
+      await navigator.share({ title, text });
+      return true;
+    } catch (e) {
+      if (e && e.name === 'AbortError') return false;
+    }
+  }
+  // 데스크탑 PC 등 파일 직접 공유 미지원 브라우저: 본문 클립보드 복사 + 첨부파일(엑셀+사진) 자동 다운로드
+  try { await navigator.clipboard.writeText(text); } catch (e) {}
+  await Modal.alert(
+    `현재 브라우저(PC 등)에서는 메일 앱 직접 첨부 창 대신 <b>본문을 클립보드에 복사</b>하고, <b>출석 엑셀 파일과 사진(${validFiles.length}개)을 폴더로 자동 다운로드</b>합니다.<br>메일 쓰기 창에 붙여넣기(Ctrl+V) 및 파일 첨부를 해주세요.`
+  );
+  await downloadFiles(validFiles);
+  return false;
+}

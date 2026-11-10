@@ -85,23 +85,25 @@ const Admin = {
     $$('figure[data-url]', container).forEach(f => f.onclick = () => this.showPhoto(f.dataset.url, f.dataset.cap));
   },
 
-  /* ===================== 주간 리포트 ===================== */
+  /* ===================== 주간 리포트 (출석엑셀 + 당일전체사진 + 24회달성자 일괄 발송) ===================== */
   async tab_report(body) {
     const cuts = Report.recentCutoffs(12);
     const sel = this.reportCut || String(cuts[0].getTime());
-    const s = await Store.settings();
-    const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
     body.innerHTML = `
       <div class="toolbar">
         <label>기준: <select id="cut">
           ${cuts.map(c => `<option value="${c.getTime()}" ${String(c.getTime()) === sel ? 'selected' : ''}>${fmtDate(c)} (일) 13:00</option>`).join('')}
           <option value="now" ${sel === 'now' ? 'selected' : ''}>지금 시점 (미리보기)</option>
         </select></label>
-        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (24회 달성자 + 인증사진)</button>
-        <button class="btn ghost" id="copy">📋 본문 복사</button>
+        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (출석엑셀 + 전체사진 + 24회달성자)</button>
+        <button class="btn ghost small" id="dl-week-xl">📊 주간 출석·통계 엑셀 다운로드</button>
+        <button class="btn ghost small" id="dl-week-photos">💾 이번 주 전체 사진 저장</button>
+        <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
-        💡 <b>리포트 메일 발송 안내</b>: 일요일 예배 후 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면 기기/데스크탑의 메일(Gmail) 앱이 열리며 <b>24회 달성자 명단(사진촬영 전 출석 분리 표기)과 인증 사진이 개별 첨부</b>되어 발송됩니다.
+        💡 <b>리포트 메일 발송 안내</b>: 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면<br>
+        ① <b>어느 부대 누가 출석했는지 + 날짜별 부대 통계 + 마일리지 현황이 담긴 엑셀 파일(.xlsx)</b><br>
+        ② <b>이번 주(당일) 촬영된 출석 사진 전체 + 24회 달성자 인증 사진</b>이 한꺼번에 메일에 첨부되어 발송됩니다. (부당수혜 점검 및 통계 확인용)
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
     $('#cut').onchange = e => { this.reportCut = e.target.value; this.render(); };
@@ -109,30 +111,66 @@ const Admin = {
     const cut = sel === 'now' ? new Date() : new Date(+sel);
     const r = await Report.build(cut);
     const text = Report.text(r);
-    const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 (${fmtDate(cut)})`;
+    const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 및 통계 (${fmtDate(cut)})`;
+    const periodPhotoCount = (r.periodAtts || []).filter(a => a.hasPhoto).length;
 
     $('#rep').innerHTML = `
       <h3>기간: ${Report.periodText(r)}</h3>
-      <h3>🎖 ${CONFIG.mileageUnit}회 단위 달성자 (${r.achievers.length}건)</h3>
+      <h3>📋 날짜별 · 부대별 출석 현황</h3>
+      ${this.statsTable(r.stats)}
+
+      <h3>📸 이번 주(당일) 예배 출석자 명단 및 촬영 사진 (총 ${(r.periodAtts || []).length}명 / 사진 ${periodPhotoCount}장)</h3>
+      ${(r.periodAtts || []).length ? `
+        <div class="card">
+          <div class="tbl-wrap" style="max-height:320px;overflow-y:auto">
+            <table class="tbl">
+              <thead><tr><th>연번</th><th>날짜 · 시간</th><th>소속부대</th><th>이름</th><th>전역일</th><th>누적출석</th><th>구분</th></tr></thead>
+              <tbody>
+                ${r.periodAtts.map((a, idx) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>${a.date}(${weekdayOf(a.date)}) ${a.time}</td>
+                    <td>${esc(a.label)}</td>
+                    <td><b>${esc(a.memberName)}</b></td>
+                    <td>${fmtYYMMDD(a.dischargeDate)}</td>
+                    <td><b>${a.cumCount}회</b></td>
+                    <td>${a.manual ? `<span class="badge">수동</span> ${esc(a.reason || '')}` : '📸 사진인증'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <details style="margin-top:.8rem" open>
+            <summary>이번 주 촬영된 전체 출석 사진 보기 (${periodPhotoCount}장 - 부당수혜/대리출석 점검)</summary>
+            <div class="thumbs" id="period-thumbs"><p class="muted">사진 불러오는 중…</p></div>
+          </details>
+        </div>
+      ` : '<p class="muted">이 기간에 출석한 인원이 없습니다.</p>'}
+
+      <h3>🎖 ${CONFIG.mileageUnit}회 단위 마일리지 달성자 (${r.achievers.length}건)</h3>
       ${r.achievers.length ? r.achievers.map((a, i) => `
         <div class="card ach">
           <div class="ach-head"><b>${esc(unitLabel(a.person))} ${esc(a.person.name)}</b>
             <span class="badge">${a.milestone}회째 달성</span>${a.person.discharged ? '<span class="badge gray">전역</span>' : ''}</div>
           <div class="ach-meta">현재 누적 ${a.total}회 · 지급 완료 ${a.grantedBlocks}회 · 지급 대상 ${a.earnedBlocks}회 ·
             <b class="${a.pendingBlocks ? 'red' : ''}">미지급 ${a.pendingBlocks}회</b> · 전역 ${a.person.dischargeDate}
-            ${a.missing ? `<br>※ 도입 전 기록 ${a.missing}회는 사진이 없습니다.` : ''}</div>
+            ${a.missing ? `<br>※ 사진촬영 전 수기 출석 ${a.missing}회 포함` : ''}</div>
           <details><summary>전체 예배 날짜 (${a.allDates.length}회)</summary>
             <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
-          <div class="thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
+          <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
             <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송</button>
-            <button class="btn small ghost" data-dl="${i}">💾 사진 ${a.block.filter(b => b.hasPhoto).length}장 저장</button>
+            <button class="btn small ghost" data-dl="${i}">💾 이 형제 24회 사진(${a.block.filter(b => b.hasPhoto).length}장) 저장</button>
           </div>
-        </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 넘긴 형제가 없습니다.</p>'}
-      <h3>📋 부대별 출석 현황</h3>${this.statsTable(r.stats)}
+        </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 새로 달성한 형제가 없습니다.</p>'}
+
       <details><summary>메일 본문 미리보기</summary><pre class="pre">${esc(text)}</pre></details>`;
 
-    for (const el of $$('.thumbs', $('#rep'))) await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
+    const pThumbs = $('#period-thumbs');
+    if (pThumbs) await this.fillThumbs(pThumbs, r.periodAtts);
+    for (const el of $$('.ach-thumbs', $('#rep'))) {
+      await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
+    }
 
     $$('[data-share]').forEach(b => b.onclick = async () => {
       const a = r.achievers[+b.dataset.share];
@@ -140,11 +178,45 @@ const Admin = {
       await shareReport(`${title} - ${a.person.name}`, Report.text(one), await photoFiles(a.block));
     });
     $$('[data-dl]').forEach(b => b.onclick = async () => downloadFiles(await photoFiles(r.achievers[+b.dataset.dl].block)));
+
+    $('#dl-week-xl').onclick = async () => {
+      const xlFile = await Report.buildWeeklyExcelFile(r);
+      if (!xlFile) return Modal.alert('엑셀 생성 도구를 불러오지 못했습니다.');
+      downloadBlob(xlFile, xlFile.name);
+    };
+
+    $('#dl-week-photos').onclick = async () => {
+      const pFiles = await photoFiles(r.periodAtts || []);
+      if (!pFiles.length) return Modal.alert('이번 기간에 저장된 사진이 없습니다.');
+      await downloadFiles(pFiles);
+    };
+
     $('#share-all').onclick = async () => {
-      const files = [];
-      for (const a of r.achievers) files.push(...await photoFiles(a.block));
-      if (files.length > 60 && !await Modal.confirm(`사진이 ${files.length}장이에요. 메일 용량(25MB)을 넘을 수 있어요.<br>형제별로 나눠 보내기를 권장합니다. 그래도 보낼까요?`)) return;
-      await shareReport(title, text, files);
+      const btn = $('#share-all');
+      btn.disabled = true;
+      const origText = btn.textContent;
+      btn.textContent = '📦 엑셀 및 전체 사진 준비 중…';
+      try {
+        const attachList = [];
+        const xlFile = await Report.buildWeeklyExcelFile(r);
+        if (xlFile) attachList.push(xlFile);
+
+        // 이번 주(당일) 찍은 전체 사진 + 24회 달성자 인증 사진 (중복 없이 통합)
+        const combinedAtts = [...(r.periodAtts || [])];
+        for (const a of r.achievers) {
+          combinedAtts.push(...(a.block || []));
+        }
+        const pFiles = await photoFiles(combinedAtts);
+        attachList.push(...pFiles);
+
+        if (pFiles.length > 60 && !await Modal.confirm(`첨부할 사진이 ${pFiles.length}장입니다. 메일 용량 제한(25MB)을 넘을 수 있습니다. 계속 진행할까요?`)) {
+          return;
+        }
+        await shareReport(title, text, attachList);
+      } finally {
+        btn.disabled = false;
+        btn.textContent = origText;
+      }
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
