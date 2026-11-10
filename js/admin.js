@@ -195,12 +195,13 @@ const Admin = {
     const combinedAtts = [...(r.periodAtts || [])];
     for (const a of r.achievers) combinedAtts.push(...(a.block || []));
     const tableImgFile = await Report.buildSummaryTableImageFile(r);
+    const xlFileReady = await Report.buildWeeklyExcelFile(r);
     const preloadedPhotos = await photoFiles(combinedAtts);
     const readyJpgAttachments = [tableImgFile, ...preloadedPhotos].filter(Boolean);
 
     $('#share-all').onclick = () => {
       // 클릭 이벤트 안에서 await 없이 즉시 shareReport를 호출해야 안드로이드 크롬이 사용자 터치로 인정하여 Gmail 공유창을 띄움
-      shareReport(title, text, readyJpgAttachments);
+      shareReport(title, text, readyJpgAttachments, xlFileReady ? [xlFileReady] : []);
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },

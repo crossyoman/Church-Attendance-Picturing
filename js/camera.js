@@ -179,8 +179,8 @@ async function downloadFiles(files) {
   }
 }
 
-/** 기기 공유창(Gmail 앱 등)으로 본문 + 사진/표 일괄 첨부 (사용자 터치 제스처 손실 방지) */
-async function shareReport(title, text, files = []) {
+/** 기기 공유창(Gmail 앱 등)으로 본문 + 사진/표 일괄 첨부 (데스크탑에서는 Gmail 웹 작성창 오픈 + 파일 다운로드) */
+async function shareReport(title, text, files = [], extraDownloadFiles = []) {
   const validFiles = (files || []).filter(Boolean);
   if (typeof navigator.share === 'function') {
     try {
@@ -193,15 +193,33 @@ async function shareReport(title, text, files = []) {
       }
     } catch (e) {
       if (e && e.name === 'AbortError') return false;
-      // 공유 중 에러 발생 시 원인 표시 후 다운로드 진행
       console.warn('[shareReport error]', e);
     }
   }
-  // 공유 기능을 지원하지 않는 PC 브라우저 등: 본문 복사 + 파일 자동 다운로드
+
+  // 공유창이 없는 데스크탑 PC 브라우저: 본문 복사 + 엑셀/사진 자동 다운로드 + Gmail 웹 작성창 오픈 안내
   try { await navigator.clipboard.writeText(text); } catch (e) {}
-  await Modal.alert(
-    `이 브라우저에서는 앱 공유창을 열 수 없어 <b>본문을 클립보드에 복사</b>하고, <b>파일(${validFiles.length}개)을 자동 다운로드</b>합니다.`
+  const dlList = [...(extraDownloadFiles || []).filter(Boolean), ...validFiles];
+  let adminEmail = (typeof CONFIG !== 'undefined' && CONFIG.defaultAdminEmail) ? CONFIG.defaultAdminEmail : 'crossyoman@gmail.com';
+  try {
+    if (typeof Store !== 'undefined' && Store.settings) {
+      const s = await Store.settings();
+      if (s && s.adminEmail) adminEmail = s.adminEmail;
+    }
+  } catch (e) {}
+
+  const openGmail = await Modal.confirm(
+    `데스크탑 PC 브라우저에서는 모바일 앱 공유창을 열 수 없어 <b>출석 엑셀 및 사진 파일(${dlList.length}개)을 자동 다운로드</b>하고 <b>본문을 클립보드에 복사</b>합니다.<br><br>` +
+    `지금 바로 <b>Gmail 메일 쓰기 창</b>을 새 탭으로 열까요?<br>` +
+    `<span class="muted">(수신자·제목·본문이 자동 입력되며, 다운로드된 파일만 마우스로 끌어다 놓으시면 됩니다. 공기계 스마트폰에서 누르시면 Gmail 앱으로 파일까지 즉시 첨부됩니다.)</span>`,
+    '📧 Gmail 웹 창 열기 + 파일 다운로드',
+    '💾 파일만 다운로드'
   );
-  await downloadFiles(validFiles);
+
+  if (openGmail) {
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(adminEmail)}&su=${encodeURIComponent(title)}&body=${encodeURIComponent(text)}`;
+    window.open(gmailUrl, '_blank', 'noopener');
+  }
+  await downloadFiles(dlList);
   return false;
 }
