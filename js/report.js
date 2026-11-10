@@ -176,6 +176,91 @@ const Report = {
     return L.join('\n');
   },
 
+  /** 안드로이드 Gmail 앱 직접 첨부용 CSV 엑셀 파일 생성 (UTF-8 BOM 포함으로 엑셀에서 한글 깨짐 없이 바로 열림) */
+  buildWeeklyCsvFile(r) {
+    const escCsv = v => {
+      const s = String(v ?? '');
+      return (s.includes(',') || s.includes('"') || s.includes('\n')) ? `"${s.replace(/"/g, '""')}"` : s;
+    };
+    const rowToCsv = arr => arr.map(escCsv).join(',');
+    const lines = [];
+    const s = r.stats;
+
+    // 1. 날짜별 부대 통계
+    lines.push(rowToCsv(['[1. 날짜별 · 부대별 출석 통계]']));
+    lines.push(rowToCsv(['부대', ...s.dates.map(d => `${d}(${weekdayOf(d)})`), '합계']));
+    s.rows.forEach(row => lines.push(rowToCsv([row.label, ...row.counts, row.sum])));
+    lines.push(rowToCsv(['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)]));
+    lines.push('');
+
+    // 2. 주간(당일) 출석자 전체 명단
+    lines.push(rowToCsv(['[2. 이번 주(당일) 예배 출석자 전체 명단]']));
+    lines.push(rowToCsv(['연번', '출석날짜', '요일', '출석시간', '소속부대', '이름', '전역일', '누적출석', '출석구분', '수동사유', '사진파일명']));
+    (r.periodAtts || []).forEach((a, idx) => {
+      lines.push(rowToCsv([
+        idx + 1,
+        a.date,
+        weekdayOf(a.date),
+        a.time,
+        a.label,
+        a.memberName,
+        fmtYYMMDD(a.dischargeDate),
+        a.cumCount,
+        a.manual ? '수동보정' : '사진촬영',
+        a.reason || '',
+        a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
+      ]));
+    });
+    lines.push('');
+
+    // 3. 24회 마일리지 달성자
+    lines.push(rowToCsv(['[3. 24회 마일리지 달성자 명단]']));
+    lines.push(rowToCsv(['연번', '소속부대', '이름', '전역일', '달성회차', '총누적출석', '사진촬영전_출석횟수', '사진인증_출석횟수', '사진인증_일자목록']));
+    (r.achievers || []).forEach((a, idx) => {
+      const p = a.person;
+      const photoAtts = a.block.filter(b => b.hasPhoto);
+      const manualAtts = a.block.filter(b => !b.hasPhoto);
+      const preCount = (a.missing || 0) + manualAtts.length;
+      lines.push(rowToCsv([
+        idx + 1,
+        unitLabel(p),
+        p.name,
+        fmtYYMMDD(p.dischargeDate),
+        `${a.milestone}회차`,
+        a.total,
+        preCount,
+        photoAtts.length,
+        photoAtts.map(b => b.date).join(' / '),
+      ]));
+    });
+    lines.push('');
+
+    // 4. 전체 용사 마일리지 현황 (1~5차 기준일·건의일)
+    lines.push(rowToCsv(['[4. 전체 용사 마일리지 현황 (24~120회 기준일·건의일)]']));
+    lines.push(rowToCsv([
+      '상태', '소속부대', '이름', '전역일', '누적출석', '사진촬영전출석', '마지막출석일',
+      '24회_기준일', '24회_건의일', '48회_기준일', '48회_건의일', '72회_기준일', '72회_건의일', '96회_기준일', '96회_건의일', '120회_기준일', '120회_건의일'
+    ]));
+    (r.people || []).forEach(p => {
+      const slots = Store.getMemberSlots(p, p.grants);
+      const row = [
+        p.discharged ? '전역' : '현역',
+        unitLabel(p),
+        p.name,
+        fmtYYMMDD(p.dischargeDate),
+        p.total,
+        p.baseCount || 0,
+        fmtYYMMDD(p.last || ''),
+      ];
+      slots.forEach(sl => row.push(fmtYYMMDD(sl.baseDate), fmtYYMMDD(sl.proposedDate)));
+      lines.push(rowToCsv(row));
+    });
+
+    const csvContent = '\uFEFF' + lines.join('\r\n');
+    const fileName = `천군교회_주간출석명단_및_부대통계_${fmtDate(r.cutoff)}.csv`;
+    return new File([csvContent], fileName, { type: 'text/csv;charset=utf-8' });
+  },
+
   /** 주간 리포트 메일 첨부용 엑셀 파일(.xlsx) 생성 */
   async buildWeeklyExcelFile(r) {
     if (typeof XLSX === 'undefined') return null;

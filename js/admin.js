@@ -191,32 +191,15 @@ const Admin = {
       await downloadFiles(pFiles);
     };
 
+    // 공기계에서 버튼 터치 즉시 Gmail 앱이 열리도록 첨부파일(엑셀 CSV + 전체 사진)을 미리 준비
+    const combinedAtts = [...(r.periodAtts || [])];
+    for (const a of r.achievers) combinedAtts.push(...(a.block || []));
+    const csvFile = Report.buildWeeklyCsvFile(r);
+    const preloadedPhotos = await photoFiles(combinedAtts);
+    const readyAttachments = [csvFile, ...preloadedPhotos].filter(Boolean);
+
     $('#share-all').onclick = async () => {
-      const btn = $('#share-all');
-      btn.disabled = true;
-      const origText = btn.textContent;
-      btn.textContent = '📦 엑셀 및 전체 사진 준비 중…';
-      try {
-        const attachList = [];
-        const xlFile = await Report.buildWeeklyExcelFile(r);
-        if (xlFile) attachList.push(xlFile);
-
-        // 이번 주(당일) 찍은 전체 사진 + 24회 달성자 인증 사진 (중복 없이 통합)
-        const combinedAtts = [...(r.periodAtts || [])];
-        for (const a of r.achievers) {
-          combinedAtts.push(...(a.block || []));
-        }
-        const pFiles = await photoFiles(combinedAtts);
-        attachList.push(...pFiles);
-
-        if (pFiles.length > 60 && !await Modal.confirm(`첨부할 사진이 ${pFiles.length}장입니다. 메일 용량 제한(25MB)을 넘을 수 있습니다. 계속 진행할까요?`)) {
-          return;
-        }
-        await shareReport(title, text, attachList);
-      } finally {
-        btn.disabled = false;
-        btn.textContent = origText;
-      }
+      await shareReport(title, text, readyAttachments);
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
