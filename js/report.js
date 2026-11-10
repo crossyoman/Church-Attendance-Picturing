@@ -176,6 +176,131 @@ const Report = {
     return L.join('\n');
   },
 
+  /** 안드로이드 Gmail 앱 100% 호환을 위해 [부대별 출석통계 + 당일 출석자 전체 명단 + 24회 달성자]를 고화질 표 이미지(JPG)로 생성 */
+  async buildSummaryTableImageFile(r) {
+    try {
+      const s = r.stats;
+      const pAtts = r.periodAtts || [];
+      const achievers = r.achievers || [];
+      const pad = 28;
+      const rowH = 30;
+      const w = 960;
+      // 높이 동적 계산
+      const statRows = s.rows.filter(x => x.sum).length + 2;
+      const attRows = Math.max(1, pAtts.length) + 1;
+      const achRows = Math.max(1, achievers.length) + 1;
+      const h = 180 + (statRows + attRows + achRows) * rowH + 160;
+
+      const c = document.createElement('canvas');
+      c.width = w;
+      c.height = h;
+      const ctx = c.getContext('2d');
+
+      // 배경
+      ctx.fillStyle = '#ffffff';
+      ctx.fillRect(0, 0, w, h);
+
+      // 상단 헤더 배너
+      ctx.fillStyle = '#1f3a5f';
+      ctx.fillRect(0, 0, w, 86);
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 24px sans-serif';
+      ctx.fillText(`[${CONFIG.churchName}] 주간 예배 출석 통계 및 전체 출석자 명단`, pad, 38);
+      ctx.fillStyle = '#ffd76a';
+      ctx.font = '16px sans-serif';
+      ctx.fillText(`기간: ${this.periodText(r)}  |  총 출석: ${pAtts.length}명  |  24회 달성: ${achievers.length}명`, pad, 68);
+
+      let y = 115;
+
+      const drawSectionTitle = title => {
+        ctx.fillStyle = '#1f3a5f';
+        ctx.font = 'bold 18px sans-serif';
+        ctx.fillText(title, pad, y);
+        y += 12;
+      };
+
+      const drawTableRow = (cols, widths, isHeader = false, isTotal = false) => {
+        let x = pad;
+        for (let i = 0; i < cols.length; i++) {
+          const cw = widths[i];
+          ctx.fillStyle = isHeader ? '#1f3a5f' : (isTotal ? '#fff8e6' : '#ffffff');
+          ctx.fillRect(x, y, cw, rowH);
+          ctx.strokeStyle = '#cbd5e1';
+          ctx.strokeRect(x, y, cw, rowH);
+          ctx.fillStyle = isHeader ? '#ffffff' : '#1e293b';
+          ctx.font = (isHeader || isTotal) ? 'bold 14px sans-serif' : '14px sans-serif';
+          const txt = String(cols[i] ?? '');
+          ctx.fillText(txt.slice(0, 26), x + 8, y + 20);
+          x += cw;
+        }
+        y += rowH;
+      };
+
+      // 1. 부대별 출석 통계표
+      drawSectionTitle('■ 1. 날짜별 · 부대별 출석 인원 통계');
+      const dCount = s.dates.length;
+      const statColW = dCount ? Math.min(110, Math.floor((w - pad * 2 - 180 - 100) / dCount)) : 100;
+      const statWidths = [180, ...s.dates.map(() => statColW), 100];
+      drawTableRow(['소속부대', ...s.dates.map(shortDate), '합계'], statWidths, true);
+      s.rows.filter(x => x.sum).forEach(row => {
+        drawTableRow([row.label, ...row.counts.map(n => `${n}명`), `${row.sum}명`], statWidths);
+      });
+      drawTableRow(['전체 합계', ...s.totals.map(n => `${n}명`), `총 ${s.totals.reduce((a, b) => a + b, 0)}명`], statWidths, false, true);
+      y += 28;
+
+      // 2. 24회 마일리지 달성자
+      drawSectionTitle(`■ 2. ${CONFIG.mileageUnit}회 마일리지 달성자 (${achievers.length}명)`);
+      const achWidths = [60, 150, 110, 110, 120, 170, 180];
+      drawTableRow(['연번', '소속부대', '이름', '전역일', '달성(누적)', '사진촬영전 출석', '사진인증 출석'], achWidths, true);
+      if (!achievers.length) {
+        drawTableRow(['-', '이번 주 신규 달성자 없음', '-', '-', '-', '-', '-'], achWidths);
+      } else {
+        achievers.forEach((a, idx) => {
+          const p = a.person;
+          const photoCnt = a.block.filter(b => b.hasPhoto).length;
+          const preCnt = (a.missing || 0) + a.block.filter(b => !b.hasPhoto).length;
+          drawTableRow([
+            idx + 1,
+            unitLabel(p),
+            p.name,
+            fmtYYMMDD(p.dischargeDate),
+            `${a.milestone}회(${a.total}회)`,
+            `${preCnt}회`,
+            `${photoCnt}회 (${photoCnt}장)`,
+          ], achWidths);
+        });
+      }
+      y += 28;
+
+      // 3. 이번 주 예배 출석자 전체 명단
+      drawSectionTitle(`■ 3. 이번 주(당일) 예배 출석자 전체 명단 (총 ${pAtts.length}명)`);
+      const attWidths = [60, 130, 90, 160, 120, 110, 110, 120];
+      drawTableRow(['연번', '출석날짜', '시간', '소속부대', '이름', '전역일', '누적출석', '구분'], attWidths, true);
+      if (!pAtts.length) {
+        drawTableRow(['-', '출석 기록 없음', '-', '-', '-', '-', '-', '-'], attWidths);
+      } else {
+        pAtts.forEach((a, idx) => {
+          drawTableRow([
+            idx + 1,
+            `${a.date}(${weekdayOf(a.date)})`,
+            a.time,
+            a.label,
+            a.memberName,
+            fmtYYMMDD(a.dischargeDate),
+            `${a.cumCount}회`,
+            a.manual ? '수동보정' : '사진촬영',
+          ], attWidths);
+        });
+      }
+
+      const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
+      if (!blob) return null;
+      return new File([blob], `00_주간출석통계_및_전체출석명단_${fmtDate(r.cutoff)}.jpg`, { type: 'image/jpeg' });
+    } catch (e) {
+      return null;
+    }
+  },
+
   /** 안드로이드 Gmail 앱 직접 첨부용 CSV 엑셀 파일 생성 (UTF-8 BOM 포함으로 엑셀에서 한글 깨짐 없이 바로 열림) */
   buildWeeklyCsvFile(r) {
     const escCsv = v => {
@@ -258,7 +383,7 @@ const Report = {
 
     const csvContent = '\uFEFF' + lines.join('\r\n');
     const fileName = `천군교회_주간출석명단_및_부대통계_${fmtDate(r.cutoff)}.csv`;
-    return new File([csvContent], fileName, { type: 'text/csv;charset=utf-8' });
+    return new File([csvContent], fileName, { type: 'text/csv' });
   },
 
   /** 주간 리포트 메일 첨부용 엑셀 파일(.xlsx) 생성 */

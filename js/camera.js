@@ -179,41 +179,28 @@ async function downloadFiles(files) {
   }
 }
 
-/** 기기 공유창(Gmail 앱 등)으로 본문 + 출석명단 파일(CSV) + 사진 전체 일괄 첨부 */
+/** 기기 공유창(Gmail 앱 등)으로 본문 + 사진/표 일괄 첨부 (사용자 터치 제스처 손실 방지) */
 async function shareReport(title, text, files = []) {
   const validFiles = (files || []).filter(Boolean);
-  if (navigator.share) {
-    // 1순위: 전체 파일(CSV 엑셀 + 사진들) 함께 Gmail 공유창 열기
-    if (validFiles.length && (!navigator.canShare || navigator.canShare({ files: validFiles }))) {
-      try {
+  if (typeof navigator.share === 'function') {
+    try {
+      if (validFiles.length && (!navigator.canShare || navigator.canShare({ files: validFiles }))) {
         await navigator.share({ title, text, files: validFiles });
         return true;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return false;
-      }
-    }
-    // 2순위: 만약 특정 파일 형식 때문에 거부된 경우 이미지 파일들만이라도 첨부하여 공유창 열기
-    const imgOnly = validFiles.filter(f => f.type && f.type.startsWith('image/'));
-    if (imgOnly.length && (!navigator.canShare || navigator.canShare({ files: imgOnly }))) {
-      try {
-        await navigator.share({ title, text, files: imgOnly });
+      } else {
+        await navigator.share({ title, text });
         return true;
-      } catch (e) {
-        if (e && e.name === 'AbortError') return false;
       }
-    }
-    // 3순위: 텍스트 본문만 공유창(Gmail 앱) 열기
-    try {
-      await navigator.share({ title, text });
-      return true;
     } catch (e) {
       if (e && e.name === 'AbortError') return false;
+      // 공유 중 에러 발생 시 원인 표시 후 다운로드 진행
+      console.warn('[shareReport error]', e);
     }
   }
-  // 데스크탑 PC 등 navigator.share 자체가 없는 환경: 본문 복사 + 파일 다운로드
+  // 공유 기능을 지원하지 않는 PC 브라우저 등: 본문 복사 + 파일 자동 다운로드
   try { await navigator.clipboard.writeText(text); } catch (e) {}
   await Modal.alert(
-    `현재 데스크탑 브라우저에서는 <b>본문을 클립보드에 복사</b>하고, <b>출석 엑셀 파일과 사진(${validFiles.length}개)을 자동 다운로드</b>합니다.`
+    `이 브라우저에서는 앱 공유창을 열 수 없어 <b>본문을 클립보드에 복사</b>하고, <b>파일(${validFiles.length}개)을 자동 다운로드</b>합니다.`
   );
   await downloadFiles(validFiles);
   return false;

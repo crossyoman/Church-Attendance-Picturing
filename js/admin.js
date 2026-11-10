@@ -191,15 +191,16 @@ const Admin = {
       await downloadFiles(pFiles);
     };
 
-    // 공기계에서 버튼 터치 즉시 Gmail 앱이 열리도록 첨부파일(엑셀 CSV + 전체 사진)을 미리 준비
+    // 공기계에서 버튼 터치 즉시 Gmail 앱이 100% 열리도록 순수 JPG 파일들(00_출석통계·명단표 이미지 + 전체 출석사진)을 사전 준비
     const combinedAtts = [...(r.periodAtts || [])];
     for (const a of r.achievers) combinedAtts.push(...(a.block || []));
-    const csvFile = Report.buildWeeklyCsvFile(r);
+    const tableImgFile = await Report.buildSummaryTableImageFile(r);
     const preloadedPhotos = await photoFiles(combinedAtts);
-    const readyAttachments = [csvFile, ...preloadedPhotos].filter(Boolean);
+    const readyJpgAttachments = [tableImgFile, ...preloadedPhotos].filter(Boolean);
 
-    $('#share-all').onclick = async () => {
-      await shareReport(title, text, readyAttachments);
+    $('#share-all').onclick = () => {
+      // 클릭 이벤트 안에서 await 없이 즉시 shareReport를 호출해야 안드로이드 크롬이 사용자 터치로 인정하여 Gmail 공유창을 띄움
+      shareReport(title, text, readyJpgAttachments);
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
