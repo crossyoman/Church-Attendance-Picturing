@@ -827,8 +827,8 @@ const Admin = {
         </div>
       </div>
       <div class="card"><h3>☁️ 백엔드 서버 연동 (Google 계정 통합 · 자동 메일 · 데스크탑 동기화)</h3>
-        <p class="hint"><code>cgchurch@gmail.com</code> 계정의 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호</b>를 입력해 연결합니다.<br>
-          봉사자가 노트북에서 <code>cgchurch@gmail.com</code> 메일에 접속하더라도 백엔드 비밀번호 없이는 백엔드 서버나 설정에 접근할 수 없으며, 비밀번호는 구글 시트에 노출되지 않고 보안 영역에만 저장됩니다.</p>
+        <p class="hint">보안을 위해 공용 계정이 아닌 <b>목사님 개인 구글 계정</b>에서 배포한 Google Apps Script 웹앱 URL과 <b>백엔드 전용 비밀번호</b>를 입력해 연결합니다.<br>
+          봉사자가 교회 공용 계정에 접속하더라도 목사님 개인 구글 드라이브의 DB 시트에는 접근할 수 없으며, 백엔드 비밀번호 역시 보안 영역에만 저장됩니다.</p>
         <form class="mform" id="bf" style="margin-top:.6rem">
           <label>Google Apps Script 웹앱 URL
             <input type="url" id="bf-url" placeholder="https://script.google.com/macros/s/.../exec" value="${esc(apiUrl)}">

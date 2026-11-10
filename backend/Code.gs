@@ -49,6 +49,7 @@ const SHEET_DEFS = {
   mileage: ['id', 'memberId', 'memberName', 'unitLabel', 'proposedDate', 'fromCount', 'uptoCount', 'days', 'memo', 'createdAt', 'json'],
   discharged: ['id', 'name', 'unit', 'company', 'dischargeDate', 'movedAt', 'json'],
   warnings: ['id', 'type', 'date', 'unitLabel', 'name', 'detail', 'resolved', 'resolvedAt', 'memo', 'emailSent', 'createdAt', 'json'],
+  photos: ['id', 'fileName', 'createdAt', 'c1', 'c2', 'c3', 'c4', 'c5', 'c6', 'c7', 'c8', 'c9', 'c10'],
   settings: ['key', 'value'],
 };
 
@@ -334,14 +335,11 @@ function getOrCreateDb() {
 }
 
 function getOrCreatePhotoFolder() {
-  const props = PropertiesService.getScriptProperties();
-  let folderId = props.getProperty('PHOTO_FOLDER_ID');
-  if (folderId) {
-    try { return DriveApp.getFolderById(folderId); } catch (e) {}
-  }
-  const folder = DriveApp.createFolder(APP_CONFIG.photoFolderName);
-  props.setProperty('PHOTO_FOLDER_ID', folder.getId());
-  return folder;
+  const ss = getOrCreateDb();
+  return {
+    getUrl: () => ss.getUrl(),
+    getName: () => ss.getName() + ' (photos 시트)',
+  };
 }
 
 function readAllObjects(sheetName) {
@@ -481,51 +479,48 @@ function safeFileName(s) {
 }
 
 function savePhotoToDrive(att, dataUrl) {
+  if (!dataUrl || !att || !att.id) return null;
+  const s = String(dataUrl);
+  const CHUNK_LEN = 45000;
+  const obj = {
+    id: String(att.id),
+    fileName: safeFileName(att.fileName || `${att.date || ''} ${att.time || ''} ${att.memberName || ''}`) + '.jpg',
+    createdAt: Date.now(),
+  };
+  for (let i = 0; i < 10; i++) {
+    obj['c' + (i + 1)] = s.slice(i * CHUNK_LEN, (i + 1) * CHUNK_LEN) || '';
+  }
+  upsertRow('photos', obj);
+  return String(att.id);
+}
+
+function trashPhotoFile(fileId) {
+  if (!fileId) return;
+  try { deleteRowById('photos', fileId); } catch (e) {}
+}
+
+function getPhotoDataUrlByAttId(attId) {
+  if (!attId) return null;
+  const row = getObjectById('photos', attId);
+  if (!row) return null;
+  let s = '';
+  for (let i = 1; i <= 10; i++) {
+    if (row['c' + i]) s += String(row['c' + i]);
+  }
+  if (!s) return null;
+  return s.startsWith('data:') ? s : `data:image/jpeg;base64,${s}`;
+}
+
+function getPhotoBlobByAtt(att) {
+  if (!att || !att.id) return null;
+  const dataUrl = getPhotoDataUrlByAttId(att.id);
   if (!dataUrl) return null;
   const m = String(dataUrl).match(/^data:([^;]+);base64,(.+)$/);
   const mime = m ? m[1] : 'image/jpeg';
   const b64 = m ? m[2] : dataUrl;
   const bytes = Utilities.base64Decode(b64);
-  const name = safeFileName(att.fileName || `${att.date} ${att.time} ${att.memberName || ''}`) + '.jpg';
-  const blob = Utilities.newBlob(bytes, mime, name);
-  const folder = getOrCreatePhotoFolder();
-  const file = folder.createFile(blob);
-  file.setDescription(`attendanceId:${att.id}`);
-  return file.getId();
-}
-
-function trashPhotoFile(fileId) {
-  if (!fileId) return;
-  try { DriveApp.getFileById(fileId).setTrashed(true); } catch (e) {}
-}
-
-function getPhotoBlobByAtt(att) {
-  if (!att) return null;
-  if (att.photoFileId) {
-    try {
-      const f = DriveApp.getFileById(att.photoFileId);
-      if (!f.isTrashed()) {
-        return f.getBlob().setName(safeFileName(att.fileName || f.getName()) + '.jpg');
-      }
-    } catch (e) {}
-  }
-  // photoFileId가 있으면 정상 반환, 없으면 null
-  return null;
-}
-
-function getPhotoDataUrlByAttId(attId) {
-  let att = getObjectById('attendance', attId);
-  if (!att) {
-    const disList = readAllObjects('discharged');
-    for (let i = 0; i < disList.length; i++) {
-      const found = (disList[i].attendances || []).find(x => x.id === attId);
-      if (found) { att = found; break; }
-    }
-  }
-  const blob = getPhotoBlobByAtt(att);
-  if (!blob) return null;
-  const b64 = Utilities.base64Encode(blob.getBytes());
-  return `data:${blob.getContentType() || 'image/jpeg'};base64,${b64}`;
+  const name = safeFileName(att.fileName || att.id) + '.jpg';
+  return Utilities.newBlob(bytes, mime, name);
 }
 
 /* ============================================================================
@@ -552,20 +547,17 @@ function replacePhotoOnServer(att, photoDataUrl) {
 
 function uploadPhotoOnServer(attId, fileName, photoDataUrl) {
   if (!attId || !photoDataUrl) return { id: attId, uploaded: false };
+  const existingPhoto = getObjectById('photos', attId);
+  if (existingPhoto && existingPhoto.c1) {
+    return { id: attId, photoFileId: attId, skipped: true };
+  }
   const att = getObjectById('attendance', attId);
+  const fileId = savePhotoToDrive(att || { id: attId, fileName: fileName || attId }, photoDataUrl);
   if (att) {
-    if (att.photoFileId) {
-      try {
-        const f = DriveApp.getFileById(att.photoFileId);
-        if (!f.isTrashed()) return { id: attId, photoFileId: att.photoFileId, skipped: true };
-      } catch (e) {}
-    }
-    att.photoFileId = savePhotoToDrive(att, photoDataUrl);
+    att.photoFileId = fileId;
     att.hasPhoto = true;
     upsertRow('attendance', att);
-    return { id: attId, photoFileId: att.photoFileId, uploaded: true };
   }
-  const fileId = savePhotoToDrive({ id: attId, fileName: fileName || attId }, photoDataUrl);
   return { id: attId, photoFileId: fileId, uploaded: true };
 }
 
