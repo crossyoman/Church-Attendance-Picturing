@@ -298,11 +298,11 @@ const App = {
       $('#shoot').disabled = true;
       Sound.unlock();
       const cd = $('#cd');
-      for (let n = CONFIG.countdownSeconds; n > 0; n--) {
+      for (let n = CONFIG.countdownSeconds || 2; n > 0; n--) {
         if (this.state.screen !== 'camera') return;
         cd.textContent = n; cd.classList.remove('pop'); void cd.offsetWidth; cd.classList.add('pop');
         Sound.beep(n === 1 ? 1100 : 880);
-        await sleep(1000);
+        await sleep(800);
       }
       if (this.state.screen !== 'camera') return;
       cd.textContent = '';
@@ -387,26 +387,61 @@ const App = {
     this.doneTimer = setTimeout(() => { cleanup(); this.home(); }, 30000);
   },
 
-  /* ---------- 목사님 전용 로그인 ---------- */
-  adminLogin() {
+  /* ---------- 목사님 전용 로그인 (모바일 터치 지연/먹통 방지) ---------- */
+  async adminLogin() {
+    // 모달을 열기 전에 설정 비밀번호를 미리 읽어두어 4번째 숫자 터치 시 비동기 지연 없이 즉시 열리게 처리
+    let targetPw = CONFIG.defaultPassword || '0113';
+    try {
+      const s = await Store.settings();
+      if (s && s.password) targetPw = String(s.password).trim();
+    } catch (e) {}
+
     let code = '';
+    let locked = false;
     const keys = ['1', '2', '3', '4', '5', '6', '7', '8', '9', '취소', '0', '⌫'];
     const w = Modal.open(`<h3>목사님 전용</h3><p class="modal-msg">비밀번호 4자리를 입력해 주세요</p>
       <div class="pin-dots">${'<span></span>'.repeat(4)}</div>
-      <div class="keypad">${keys.map(k => `<button data-k="${k}">${k}</button>`).join('')}</div>`, 'pin');
+      <div class="keypad">${keys.map(k => `<button type="button" data-k="${k}">${k}</button>`).join('')}</div>`, 'pin');
     const dots = $$('.pin-dots span', w);
     const paint = () => dots.forEach((d, i) => d.classList.toggle('on', i < code.length));
-    $$('.keypad button', w).forEach(b => b.onclick = async () => {
-      const k = b.dataset.k;
-      if (k === '취소') return Modal.close(w);
-      if (k === '⌫') code = code.slice(0, -1);
-      else if (code.length < 4) code += k;
-      paint();
-      if (code.length === 4) {
-        const s = await Store.settings();
-        if (code === s.password) { Modal.close(w); Admin.open(); }
-        else { $('.pin-dots', w).classList.add('shake'); setTimeout(() => { code = ''; paint(); $('.pin-dots', w).classList.remove('shake'); }, 450); }
-      }
+
+    $$('.keypad button', w).forEach(b => {
+      const handlePress = e => {
+        if (e && e.cancelable) e.preventDefault();
+        if (e) e.stopPropagation();
+        if (locked) return;
+        const k = b.dataset.k;
+        if (k === '취소') {
+          Modal.close(w);
+          return;
+        }
+        if (k === '⌫') {
+          code = code.slice(0, -1);
+          paint();
+          return;
+        }
+        if (code.length < 4) code += k;
+        paint();
+        if (code.length === 4) {
+          if (code === targetPw) {
+            locked = true;
+            Modal.close(w);
+            Admin.open();
+          } else {
+            locked = true;
+            $('.pin-dots', w).classList.add('shake');
+            setTimeout(() => {
+              code = '';
+              locked = false;
+              paint();
+              const pd = $('.pin-dots', w);
+              if (pd) pd.classList.remove('shake');
+            }, 420);
+          }
+        }
+      };
+      // 모바일 빠른 연속 터치 시 click 누락 방지 (pointerdown 즉시 반응)
+      b.onpointerdown = handlePress;
     });
   },
 };

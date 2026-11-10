@@ -85,33 +85,86 @@ const Admin = {
     $$('figure[data-url]', container).forEach(f => f.onclick = () => this.showPhoto(f.dataset.url, f.dataset.cap));
   },
 
-  /* ===================== 주간 리포트 (출석엑셀 + 당일전체사진 + 24회달성자 일괄 발송) ===================== */
+  /* ===================== 주간 리포트 (사용자 날짜 선택 + 출석엑셀 + 전체사진 + 24회달성자 일괄 발송) ===================== */
   async tab_report(body) {
-    const cuts = Report.recentCutoffs(12);
-    const sel = this.reportCut || String(cuts[0].getTime());
+    const today = todayStr();
+    const defaultStart = fmtDate(new Date(Date.now() - 6 * 864e5)); // 오늘 포함 최근 1주일(7일간)
+    if (!this.reportEnd) this.reportEnd = today;
+    if (!this.reportStart) this.reportStart = defaultStart;
+
     body.innerHTML = `
+      <div class="card" style="margin-bottom:.8rem;padding:.9rem 1.1rem;background:#f8fafc;border:1.5px solid #cbd5e1">
+        <div class="toolbar" style="margin-bottom:0;gap:.6rem;align-items:center">
+          <b style="color:var(--navy)">📅 조회 기간 설정:</b>
+          <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:700">
+            시작일 <input type="date" id="rep-start" value="${esc(this.reportStart)}" max="${esc(today)}">
+          </label>
+          <span>~</span>
+          <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:700">
+            종료일 <input type="date" id="rep-end" value="${esc(this.reportEnd)}" max="${esc(today)}">
+          </label>
+          <button class="btn ghost small" id="rep-1w" title="종료일 기준 최근 1주일(7일간)로 자동 설정">↺ 선택일 기준 1주일</button>
+          <button class="btn ghost small" id="rep-today" title="오늘 하루만 조회">오늘 하루</button>
+        </div>
+        <p class="muted" style="margin:.45rem 0 0;font-size:.82rem">
+          ※ 종료일을 바꾸시면 자동으로 그 날부터 1주일 전 날짜가 시작일로 맞춰지며, 시작일과 종료일을 원하시는 날짜로 직접 변경하실 수도 있습니다.
+        </p>
+      </div>
       <div class="toolbar">
-        <label>기준: <select id="cut">
-          ${cuts.map(c => `<option value="${c.getTime()}" ${String(c.getTime()) === sel ? 'selected' : ''}>${fmtDate(c)} (일) 13:00</option>`).join('')}
-          <option value="now" ${sel === 'now' ? 'selected' : ''}>지금 시점 (미리보기)</option>
-        </select></label>
         <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (출석엑셀 + 전체사진 + 24회달성자)</button>
-        <button class="btn ghost small" id="dl-week-xl">📊 주간 출석·통계 엑셀 다운로드</button>
-        <button class="btn ghost small" id="dl-week-photos">💾 이번 주 전체 사진 저장</button>
+        <button class="btn ghost small" id="dl-week-xl">📊 출석·통계 엑셀(.xlsx) 다운로드</button>
+        <button class="btn ghost small" id="dl-week-photos">💾 기간 내 전체 사진 저장</button>
         <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
         💡 <b>리포트 메일 발송 안내</b>: 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면<br>
-        ① <b>어느 부대 누가 출석했는지 + 날짜별 부대 통계 + 마일리지 현황이 담긴 엑셀 파일(.xlsx)</b><br>
-        ② <b>이번 주(당일) 촬영된 출석 사진 전체 + 24회 달성자 인증 사진</b>이 한꺼번에 메일에 첨부되어 발송됩니다. (부당수혜 점검 및 통계 확인용)
+        ① <b>어느 부대 누가 출석했는지 + 날짜별 부대 통계 + 마일리지 현황이 담긴 엑셀 파일</b><br>
+        ② <b>선택한 기간에 촬영된 출석 사진 전체 + 24회 달성자 인증 사진</b>이 한꺼번에 메일에 첨부되어 발송됩니다. (부당수혜 점검 및 통계 확인용)
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
-    $('#cut').onchange = e => { this.reportCut = e.target.value; this.render(); };
 
-    const cut = sel === 'now' ? new Date() : new Date(+sel);
-    const r = await Report.build(cut);
+    const startInput = $('#rep-start');
+    const endInput = $('#rep-end');
+
+    // 종료일을 변경하면 기본적으로 종료일로부터 1주일(7일간)로 시작일 자동 세팅
+    endInput.onchange = () => {
+      const endVal = endInput.value || today;
+      const [ey, em, ed] = endVal.split('-').map(Number);
+      const endDt = new Date(ey, em - 1, ed);
+      const autoStartDt = new Date(endDt.getTime() - 6 * 864e5);
+      this.reportEnd = endVal;
+      this.reportStart = fmtDate(autoStartDt);
+      this.render();
+    };
+
+    // 시작일을 직접 바꾸면 사용자가 지정한 시작일~종료일 그대로 적용
+    startInput.onchange = () => {
+      const sVal = startInput.value || defaultStart;
+      this.reportStart = sVal;
+      if (this.reportEnd && sVal > this.reportEnd) {
+        this.reportEnd = sVal;
+      }
+      this.render();
+    };
+
+    $('#rep-1w').onclick = () => {
+      const endVal = endInput.value || today;
+      const [ey, em, ed] = endVal.split('-').map(Number);
+      const endDt = new Date(ey, em - 1, ed);
+      this.reportEnd = endVal;
+      this.reportStart = fmtDate(new Date(endDt.getTime() - 6 * 864e5));
+      this.render();
+    };
+
+    $('#rep-today').onclick = () => {
+      this.reportStart = today;
+      this.reportEnd = today;
+      this.render();
+    };
+
+    const r = await Report.build(null, this.reportStart, this.reportEnd);
     const text = Report.text(r);
-    const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 및 통계 (${fmtDate(cut)})`;
+    const title = `[${CONFIG.churchName}] 예배 출석 리포트 및 통계 (${r.startDateStr} ~ ${r.endDateStr})`;
     const periodPhotoCount = (r.periodAtts || []).filter(a => a.hasPhoto).length;
 
     $('#rep').innerHTML = `
@@ -119,7 +172,7 @@ const Admin = {
       <h3>📋 날짜별 · 부대별 출석 현황</h3>
       ${this.statsTable(r.stats)}
 
-      <h3>📸 이번 주(당일) 예배 출석자 명단 및 촬영 사진 (총 ${(r.periodAtts || []).length}명 / 사진 ${periodPhotoCount}장)</h3>
+      <h3>📸 선택 기간 예배 출석자 명단 및 촬영 사진 (총 ${(r.periodAtts || []).length}명 / 사진 ${periodPhotoCount}장)</h3>
       ${(r.periodAtts || []).length ? `
         <div class="card">
           <div class="tbl-wrap" style="max-height:320px;overflow-y:auto">
@@ -141,11 +194,11 @@ const Admin = {
             </table>
           </div>
           <details style="margin-top:.8rem" open>
-            <summary>이번 주 촬영된 전체 출석 사진 보기 (${periodPhotoCount}장 - 부당수혜/대리출석 점검)</summary>
+            <summary>선택 기간 촬영된 전체 출석 사진 보기 (${periodPhotoCount}장 - 부당수혜/대리출석 점검)</summary>
             <div class="thumbs" id="period-thumbs"><p class="muted">사진 불러오는 중…</p></div>
           </details>
         </div>
-      ` : '<p class="muted">이 기간에 출석한 인원이 없습니다.</p>'}
+      ` : '<p class="muted">선택한 기간에 출석한 인원이 없습니다.</p>'}
 
       <h3>🎖 ${CONFIG.mileageUnit}회 단위 마일리지 달성자 (${r.achievers.length}건)</h3>
       ${r.achievers.length ? r.achievers.map((a, i) => `
@@ -187,21 +240,32 @@ const Admin = {
 
     $('#dl-week-photos').onclick = async () => {
       const pFiles = await photoFiles(r.periodAtts || []);
-      if (!pFiles.length) return Modal.alert('이번 기간에 저장된 사진이 없습니다.');
+      if (!pFiles.length) return Modal.alert('선택한 기간에 저장된 사진이 없습니다.');
       await downloadFiles(pFiles);
     };
 
-    // 공기계에서 버튼 터치 즉시 Gmail 앱이 100% 열리도록 순수 JPG 파일들(00_출석통계·명단표 이미지 + 전체 출석사진)을 사전 준비
+    // 메일 첨부용 엑셀 파일(.csv / .xlsx) 및 전체 출석 사진을 미리 준비하여 터치 즉시 Gmail 공유창에 엑셀+사진이 함께 첨부되게 처리
     const combinedAtts = [...(r.periodAtts || [])];
     for (const a of r.achievers) combinedAtts.push(...(a.block || []));
-    const tableImgFile = await Report.buildSummaryTableImageFile(r);
+    const csvExcelFile = Report.buildWeeklyCsvFile(r);
     const xlFileReady = await Report.buildWeeklyExcelFile(r);
     const preloadedPhotos = await photoFiles(combinedAtts);
-    const readyJpgAttachments = [tableImgFile, ...preloadedPhotos].filter(Boolean);
+
+    // 기기 브라우저가 .xlsx 공유를 허용하면 .xlsx + 전체사진, 안드로이드 크롬처럼 .xlsx를 막으면 엑셀 호환 .csv + 전체사진으로 자동 구성
+    let shareFiles = [csvExcelFile, ...preloadedPhotos].filter(Boolean);
+    if (xlFileReady && typeof navigator.canShare === 'function') {
+      try {
+        if (navigator.canShare({ files: [xlFileReady, ...preloadedPhotos] })) {
+          shareFiles = [xlFileReady, ...preloadedPhotos];
+        } else if (navigator.canShare({ files: [csvExcelFile, ...preloadedPhotos] })) {
+          shareFiles = [csvExcelFile, ...preloadedPhotos];
+        }
+      } catch (e) {}
+    }
 
     $('#share-all').onclick = () => {
       // 클릭 이벤트 안에서 await 없이 즉시 shareReport를 호출해야 안드로이드 크롬이 사용자 터치로 인정하여 Gmail 공유창을 띄움
-      shareReport(title, text, readyJpgAttachments, xlFileReady ? [xlFileReady] : []);
+      shareReport(title, text, shareFiles, xlFileReady ? [xlFileReady, ...preloadedPhotos] : [csvExcelFile, ...preloadedPhotos]);
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },

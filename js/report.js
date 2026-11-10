@@ -1,7 +1,7 @@
 /* =========================================================
- * 주간 리포트 (매주 일요일 13:00 기준)
+ * 주간 리포트 (사용자 지정 날짜 기간 지원: 기본 1주일)
  * - 24회 배수 달성자 + 사진촬영 전 출석 분리 표기
- * - 당일/주간 전체 출석자 명단, 날짜별·부대별 통계, 전체 촬영 사진 및 엑셀 생성
+ * - 기간 내 전체 출석자 명단, 날짜별·부대별 통계, 전체 촬영 사진 및 엑셀 생성
  * ========================================================= */
 const Report = {
   /** ref 시점 기준 가장 최근의 '일요일 13:00' */
@@ -19,11 +19,28 @@ const Report = {
     return out;
   },
 
-  async build(cutoff) {
+  /**
+   * 기간별 리포트 계산
+   * - startDateStr, endDateStr ('YYYY-MM-DD')가 주어지면 해당 날짜 범위(시작일 00:00:00 ~ 종료일 23:59:59) 기준으로 집계
+   */
+  async build(cutoffOrEnd, startDateStr = null, endDateStr = null) {
     const U = CONFIG.mileageUnit;
-    const end = cutoff.getTime();
-    const prev = new Date(end - 7 * 864e5);
-    const start = prev.getTime();
+    let start, end, prev, cutoff;
+
+    if (startDateStr && endDateStr) {
+      const [sy, sm, sd] = startDateStr.split('-').map(Number);
+      const [ey, em, ed] = endDateStr.split('-').map(Number);
+      prev = new Date(sy, sm - 1, sd, 0, 0, 0, 0);
+      cutoff = new Date(ey, em - 1, ed, 23, 59, 59, 999);
+      start = prev.getTime() - 1; // 시작일 00:00:00 포함을 위해 -1ms
+      end = cutoff.getTime();
+    } else {
+      cutoff = cutoffOrEnd instanceof Date ? cutoffOrEnd : new Date();
+      end = cutoff.getTime();
+      prev = new Date(end - 7 * 864e5);
+      start = prev.getTime();
+    }
+
     const people = await Store.allPeopleFull();
 
     const achievers = [];
@@ -48,7 +65,7 @@ const Report = {
     }
     achievers.sort((a, b) => unitOrder(unitLabel(a.person)) - unitOrder(unitLabel(b.person)) || koSort(a.person, b.person));
 
-    // 이번 주간(그날) 출석한 전체 기록 (부대별 누가 출석했는지 + 촬영 사진 전체)
+    // 선택된 기간 동안 출석한 전체 기록 (부대별 누가 출석했는지 + 촬영 사진 전체)
     const inWin = [];
     people.forEach(p => {
       const base = p.baseCount || 0;
@@ -76,7 +93,18 @@ const Report = {
 
     const warnings = (await Store.warnings()).filter(w => w.createdAt > start && w.createdAt <= end);
 
-    return { cutoff, prev, achievers, periodAtts: inWin, people, stats: { dates, rows, totals }, warnings };
+    return {
+      cutoff,
+      prev,
+      startDateStr: startDateStr || fmtDate(prev),
+      endDateStr: endDateStr || fmtDate(cutoff),
+      isCustomRange: !!(startDateStr && endDateStr),
+      achievers,
+      periodAtts: inWin,
+      people,
+      stats: { dates, rows, totals },
+      warnings,
+    };
   },
 
   /** [경고-확인필요] 메일 본문 */
@@ -93,6 +121,9 @@ const Report = {
   },
 
   periodText(r) {
+    if (r.isCustomRange) {
+      return `${r.startDateStr}(${weekdayOf(r.startDateStr)}) ~ ${r.endDateStr}(${weekdayOf(r.endDateStr)})`;
+    }
     return `${fmtDate(r.prev)}(${WEEK[r.prev.getDay()]}) ${fmtTime(r.prev)} ~ ${fmtDate(r.cutoff)}(${WEEK[r.cutoff.getDay()]}) ${fmtTime(r.cutoff)}`;
   },
 
@@ -101,11 +132,11 @@ const Report = {
     const L = [];
     L.push(`[${CONFIG.churchName} 주간 예배 출석 리포트 및 통계]`);
     L.push(`기간: ${this.periodText(r)}`);
-    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일(.xlsx)  2) 금주 촬영 출석사진 전체 (${(r.periodAtts || []).filter(a => a.hasPhoto).length}장)`);
+    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일  2) 기간 내 촬영 출석사진 전체 (${(r.periodAtts || []).filter(a => a.hasPhoto).length}장)`);
     L.push('');
     L.push(`■ ${CONFIG.mileageUnit}회 마일리지 달성자 (${r.achievers.length}명)`);
     if (!r.achievers.length) {
-      L.push('  - 이번 주 신규 마일리지 달성자가 없습니다.');
+      L.push('  - 이 기간 신규 마일리지 달성자가 없습니다.');
     }
     r.achievers.forEach((a, i) => {
       const p = a.person;
@@ -141,7 +172,7 @@ const Report = {
     });
 
     if (r.warnings && r.warnings.length) {
-      L.push(`■ [경고-확인필요] 이번 주 중복/재출석 의심 (${r.warnings.length}건)`);
+      L.push(`■ [경고-확인필요] 기간 내 중복/재출석 의심 (${r.warnings.length}건)`);
       r.warnings.forEach(w => L.push(`  - ${w.date} ${w.unitLabel} ${w.name}: ${w.detail}${w.resolved ? ' → 확인 완료(' + (w.memo || '이상없음') + ')' : ''}`));
       L.push('');
     }
@@ -158,7 +189,7 @@ const Report = {
     L.push('');
 
     const pAtts = r.periodAtts || [];
-    L.push(`■ 이번 주 예배 출석자 전체 명단 (총 ${pAtts.length}명)`);
+    L.push(`■ 기간 내 예배 출석자 전체 명단 (총 ${pAtts.length}명)`);
     if (!pAtts.length) {
       L.push('  - 출석자가 없습니다.');
     } else {
@@ -176,132 +207,11 @@ const Report = {
     return L.join('\n');
   },
 
-  /** 안드로이드 Gmail 앱 100% 호환을 위해 [부대별 출석통계 + 당일 출석자 전체 명단 + 24회 달성자]를 고화질 표 이미지(JPG)로 생성 */
-  async buildSummaryTableImageFile(r) {
-    try {
-      const s = r.stats;
-      const pAtts = r.periodAtts || [];
-      const achievers = r.achievers || [];
-      const pad = 28;
-      const rowH = 30;
-      const w = 960;
-      // 높이 동적 계산
-      const statRows = s.rows.filter(x => x.sum).length + 2;
-      const attRows = Math.max(1, pAtts.length) + 1;
-      const achRows = Math.max(1, achievers.length) + 1;
-      const h = 180 + (statRows + attRows + achRows) * rowH + 160;
-
-      const c = document.createElement('canvas');
-      c.width = w;
-      c.height = h;
-      const ctx = c.getContext('2d');
-
-      // 배경
-      ctx.fillStyle = '#ffffff';
-      ctx.fillRect(0, 0, w, h);
-
-      // 상단 헤더 배너
-      ctx.fillStyle = '#1f3a5f';
-      ctx.fillRect(0, 0, w, 86);
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 24px sans-serif';
-      ctx.fillText(`[${CONFIG.churchName}] 주간 예배 출석 통계 및 전체 출석자 명단`, pad, 38);
-      ctx.fillStyle = '#ffd76a';
-      ctx.font = '16px sans-serif';
-      ctx.fillText(`기간: ${this.periodText(r)}  |  총 출석: ${pAtts.length}명  |  24회 달성: ${achievers.length}명`, pad, 68);
-
-      let y = 115;
-
-      const drawSectionTitle = title => {
-        ctx.fillStyle = '#1f3a5f';
-        ctx.font = 'bold 18px sans-serif';
-        ctx.fillText(title, pad, y);
-        y += 12;
-      };
-
-      const drawTableRow = (cols, widths, isHeader = false, isTotal = false) => {
-        let x = pad;
-        for (let i = 0; i < cols.length; i++) {
-          const cw = widths[i];
-          ctx.fillStyle = isHeader ? '#1f3a5f' : (isTotal ? '#fff8e6' : '#ffffff');
-          ctx.fillRect(x, y, cw, rowH);
-          ctx.strokeStyle = '#cbd5e1';
-          ctx.strokeRect(x, y, cw, rowH);
-          ctx.fillStyle = isHeader ? '#ffffff' : '#1e293b';
-          ctx.font = (isHeader || isTotal) ? 'bold 14px sans-serif' : '14px sans-serif';
-          const txt = String(cols[i] ?? '');
-          ctx.fillText(txt.slice(0, 26), x + 8, y + 20);
-          x += cw;
-        }
-        y += rowH;
-      };
-
-      // 1. 부대별 출석 통계표
-      drawSectionTitle('■ 1. 날짜별 · 부대별 출석 인원 통계');
-      const dCount = s.dates.length;
-      const statColW = dCount ? Math.min(110, Math.floor((w - pad * 2 - 180 - 100) / dCount)) : 100;
-      const statWidths = [180, ...s.dates.map(() => statColW), 100];
-      drawTableRow(['소속부대', ...s.dates.map(shortDate), '합계'], statWidths, true);
-      s.rows.filter(x => x.sum).forEach(row => {
-        drawTableRow([row.label, ...row.counts.map(n => `${n}명`), `${row.sum}명`], statWidths);
-      });
-      drawTableRow(['전체 합계', ...s.totals.map(n => `${n}명`), `총 ${s.totals.reduce((a, b) => a + b, 0)}명`], statWidths, false, true);
-      y += 28;
-
-      // 2. 24회 마일리지 달성자
-      drawSectionTitle(`■ 2. ${CONFIG.mileageUnit}회 마일리지 달성자 (${achievers.length}명)`);
-      const achWidths = [60, 150, 110, 110, 120, 170, 180];
-      drawTableRow(['연번', '소속부대', '이름', '전역일', '달성(누적)', '사진촬영전 출석', '사진인증 출석'], achWidths, true);
-      if (!achievers.length) {
-        drawTableRow(['-', '이번 주 신규 달성자 없음', '-', '-', '-', '-', '-'], achWidths);
-      } else {
-        achievers.forEach((a, idx) => {
-          const p = a.person;
-          const photoCnt = a.block.filter(b => b.hasPhoto).length;
-          const preCnt = (a.missing || 0) + a.block.filter(b => !b.hasPhoto).length;
-          drawTableRow([
-            idx + 1,
-            unitLabel(p),
-            p.name,
-            fmtYYMMDD(p.dischargeDate),
-            `${a.milestone}회(${a.total}회)`,
-            `${preCnt}회`,
-            `${photoCnt}회 (${photoCnt}장)`,
-          ], achWidths);
-        });
-      }
-      y += 28;
-
-      // 3. 이번 주 예배 출석자 전체 명단
-      drawSectionTitle(`■ 3. 이번 주(당일) 예배 출석자 전체 명단 (총 ${pAtts.length}명)`);
-      const attWidths = [60, 130, 90, 160, 120, 110, 110, 120];
-      drawTableRow(['연번', '출석날짜', '시간', '소속부대', '이름', '전역일', '누적출석', '구분'], attWidths, true);
-      if (!pAtts.length) {
-        drawTableRow(['-', '출석 기록 없음', '-', '-', '-', '-', '-', '-'], attWidths);
-      } else {
-        pAtts.forEach((a, idx) => {
-          drawTableRow([
-            idx + 1,
-            `${a.date}(${weekdayOf(a.date)})`,
-            a.time,
-            a.label,
-            a.memberName,
-            fmtYYMMDD(a.dischargeDate),
-            `${a.cumCount}회`,
-            a.manual ? '수동보정' : '사진촬영',
-          ], attWidths);
-        });
-      }
-
-      const blob = await new Promise(res => c.toBlob(res, 'image/jpeg', 0.92));
-      if (!blob) return null;
-      return new File([blob], `00_주간출석통계_및_전체출석명단_${fmtDate(r.cutoff)}.jpg`, { type: 'image/jpeg' });
-    } catch (e) {
-      return null;
-    }
-  },
-
-  /** 안드로이드 Gmail 앱 직접 첨부용 CSV 엑셀 파일 생성 (UTF-8 BOM 포함으로 엑셀에서 한글 깨짐 없이 바로 열림) */
+  /**
+   * 안드로이드 Gmail 앱 100% 직접 첨부 호환용 CSV 엑셀 파일 생성
+   * - 주의: MIME 타입에 ';charset=utf-8' 파라미터를 붙이면 안드로이드 Chrome navigator.share가 거부하므로
+   *   반드시 순수 'text/csv'로 지정하고 UTF-8 BOM('\uFEFF')을 앞에 붙여 엑셀에서 한글이 완벽히 열리게 함
+   */
   buildWeeklyCsvFile(r) {
     const escCsv = v => {
       const s = String(v ?? '');
@@ -312,14 +222,14 @@ const Report = {
     const s = r.stats;
 
     // 1. 날짜별 부대 통계
-    lines.push(rowToCsv(['[1. 날짜별 · 부대별 출석 통계]']));
+    lines.push(rowToCsv([`[1. 날짜별 · 부대별 출석 통계 (${this.periodText(r)})]`]));
     lines.push(rowToCsv(['부대', ...s.dates.map(d => `${d}(${weekdayOf(d)})`), '합계']));
     s.rows.forEach(row => lines.push(rowToCsv([row.label, ...row.counts, row.sum])));
     lines.push(rowToCsv(['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)]));
     lines.push('');
 
-    // 2. 주간(당일) 출석자 전체 명단
-    lines.push(rowToCsv(['[2. 이번 주(당일) 예배 출석자 전체 명단]']));
+    // 2. 기간 내 출석자 전체 명단
+    lines.push(rowToCsv(['[2. 예배 출석자 전체 명단]']));
     lines.push(rowToCsv(['연번', '출석날짜', '요일', '출석시간', '소속부대', '이름', '전역일', '누적출석', '출석구분', '수동사유', '사진파일명']));
     (r.periodAtts || []).forEach((a, idx) => {
       lines.push(rowToCsv([
@@ -382,11 +292,12 @@ const Report = {
     });
 
     const csvContent = '\uFEFF' + lines.join('\r\n');
-    const fileName = `천군교회_주간출석명단_및_부대통계_${fmtDate(r.cutoff)}.csv`;
+    const rangeTag = `${r.startDateStr || fmtDate(r.prev)}_${r.endDateStr || fmtDate(r.cutoff)}`;
+    const fileName = `천군교회_출석명단_및_부대통계_${rangeTag}.csv`;
     return new File([csvContent], fileName, { type: 'text/csv' });
   },
 
-  /** 주간 리포트 메일 첨부용 엑셀 파일(.xlsx) 생성 */
+  /** 주간 리포트 다운로드 및 첨부용 엑셀 파일(.xlsx) 생성 */
   async buildWeeklyExcelFile(r) {
     if (typeof XLSX === 'undefined') return null;
     const wb = XLSX.utils.book_new();
@@ -394,13 +305,13 @@ const Report = {
 
     // 1. 날짜별_부대통계 시트
     const statAoa = [
-      ['부대', ...s.dates.map(d => `${d} (${weekdayOf(d)})`), '주간 합계'],
+      ['부대', ...s.dates.map(d => `${d} (${weekdayOf(d)})`), '기간 합계'],
       ...s.rows.map(row => [row.label, ...row.counts, row.sum]),
       ['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(statAoa), '날짜별_부대통계');
 
-    // 2. 주간_출석자_명단 시트
+    // 2. 출석자_전체명단 시트
     const attRows = (r.periodAtts || []).map((a, idx) => ({
       연번: idx + 1,
       출석날짜: a.date,
@@ -417,8 +328,8 @@ const Report = {
     }));
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(attRows.length ? attRows : [{ 안내: '이번 기간 출석 기록이 없습니다.' }]),
-      '주간_출석자_명단'
+      XLSX.utils.json_to_sheet(attRows.length ? attRows : [{ 안내: '선택한 기간에 출석 기록이 없습니다.' }]),
+      '출석자_전체명단'
     );
 
     // 3. 24회_마일리지_달성자 시트
@@ -441,7 +352,7 @@ const Report = {
     });
     XLSX.utils.book_append_sheet(
       wb,
-      XLSX.utils.json_to_sheet(achRows.length ? achRows : [{ 안내: '이번 주 24회 마일리지 신규 달성자가 없습니다.' }]),
+      XLSX.utils.json_to_sheet(achRows.length ? achRows : [{ 안내: '선택한 기간에 24회 마일리지 신규 달성자가 없습니다.' }]),
       '24회_마일리지_달성자'
     );
 
@@ -483,7 +394,8 @@ const Report = {
     XLSX.utils.book_append_sheet(wb, wsMil, '전체_마일리지_현황');
 
     const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
-    const fileName = `천군교회_주간출석명단_및_부대통계_${fmtDate(r.cutoff)}.xlsx`;
+    const rangeTag = `${r.startDateStr || fmtDate(r.prev)}_${r.endDateStr || fmtDate(r.cutoff)}`;
+    const fileName = `천군교회_출석명단_및_부대통계_${rangeTag}.xlsx`;
     return new File([wbout], fileName, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });

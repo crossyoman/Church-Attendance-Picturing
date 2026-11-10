@@ -30,7 +30,7 @@ const CONFIG = {
   longAbsentMonths: 3,      // 3개월 이상 미출석 → '오랜만에 왔어요' 명단으로
   photoMaxBytes: 500 * 1024,// 사진 최대 용량 약 500KB
   photoMaxSide: 1280,       // 사진 긴 변 최대 픽셀
-  countdownSeconds: 3,      // 촬영 타이머
+  countdownSeconds: 2,      // 촬영 타이머 (2, 1, 찰칵)
   idleSeconds: 60,          // 아무 조작 없으면 첫 화면으로 (초)
   adminIdleSeconds: 300,    // 목사님 화면 자동 잠금 (초)
   reportWeekday: 0,         // 리포트 기준 요일 (0 = 일요일)
