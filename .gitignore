@@ -13,3 +13,6 @@ _smoketest.html
 # IDE
 .vscode/
 .idea/
+
+# 개인 보관용 폴더 제외
+마일리지 최초 사진/

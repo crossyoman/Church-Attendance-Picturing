@@ -160,24 +160,17 @@ const Admin = {
   /* ===================== 경고 [경고-확인필요] ===================== */
   async tab_warnings(body) {
     const list = await Store.warnings();
-    const s = await Store.settings();
-    const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
-    body.innerHTML = `<div class="note">같은 날 같은 부대·같은 이름으로 출석이 2건 이상 기록되거나, 이미 출석한 형제가 다시 출석/등록을 시도하면 여기에 남습니다.<br>
-      ${isConn
-        ? `✅ <b>백엔드 서버 연결됨</b>: 경고 상황 발생 즉시 <b>${esc(s.adminEmail)}</b>로 <b>[경고-확인필요]</b> 메일과 사진이 자동 발송됩니다.`
-        : `⚠️ <b>⚙️ 설정</b> 탭에서 백엔드 서버를 연결하면 경고 발생 즉시 <b>${esc(s.adminEmail)}</b>로 자동 메일이 발송됩니다.`}</div>
+    body.innerHTML = `<div class="note">같은 날 같은 부대·같은 이름으로 출석이 2건 이상 기록되거나, 이미 출석한 형제가 다시 출석/등록을 시도하면 여기에 남습니다.</div>
       ${list.length ? list.map((w, i) => `
         <div class="card warn-card ${w.resolved ? 'resolved' : ''}">
           <div class="ach-head"><b>[경고-확인필요] ${esc(w.unitLabel)} ${esc(w.name)}</b> <span class="badge">${w.date}</span>
-            ${w.emailSent ? '<span class="badge" style="background:var(--green)">📧 메일발송됨</span>' : ''}
-            ${w.resolved ? '<span class="badge gray">확인 완료</span>' : ''}</div>
+            ${w.resolved ? '<span class="badge gray">확인 완료</span>' : '<span class="badge" style="background:var(--red)">미확인</span>'}</div>
           <div class="ach-meta">${esc(w.detail)}<br><span class="muted">발생: ${new Date(w.createdAt).toLocaleString('ko-KR')}</span>
-            ${w.resolved ? `<br>확인 메모: ${esc(w.memo || '')}` : ''}</div>
+            ${w.resolved ? `<br><b>특이사항 메모:</b> ${esc(w.memo || '이상없음')}` : ''}</div>
           <div class="thumbs" data-i="${i}"></div>
           <div class="row">
-            <button class="btn small" data-wserver="${i}">🚀 서버에서 즉시 메일 발송</button>
             <button class="btn small ghost" data-wshare="${i}">📧 기기 메일 앱 공유</button>
-            ${w.resolved ? '' : `<button class="btn small ghost" data-wok="${i}">✔ 확인 완료 처리</button>`}
+            ${w.resolved ? `<button class="btn small ghost" data-wok="${i}">✏️ 메모 수정</button>` : `<button class="btn small primary" data-wok="${i}">✔ 확인 완료 처리</button>`}
           </div>
         </div>`).join('') : '<p class="muted">경고가 없습니다. 👍</p>'}`;
     const attsOf = async w => (await Promise.all((w.attendanceIds || []).map(id => Store.attendanceById(id)))).filter(Boolean);
@@ -185,19 +178,6 @@ const Admin = {
       const atts = await attsOf(list[+el.dataset.i]);
       if (atts.length) await this.fillThumbs(el, atts); else el.innerHTML = '<p class="muted">관련 사진 없음 (삭제/취소됨)</p>';
     }
-    $$('[data-wserver]', body).forEach(b => b.onclick = async () => {
-      if (!isConn) return Modal.alert('먼저 ⚙️ 설정 탭에서 백엔드 서버 URL을 연결해 주세요.');
-      const w = list[+b.dataset.wserver];
-      b.disabled = true; b.textContent = '발송 중…';
-      try {
-        const res = await Backend.sendWarningEmailNow(w);
-        await Modal.alert(`<b>${esc(res.to)}</b>으로 [경고-확인필요] 메일을 발송했습니다.`);
-        this.render();
-      } catch (e) {
-        await Modal.alert('서버 메일 발송 실패: ' + esc(e.message));
-        b.disabled = false; b.textContent = '🚀 서버에서 즉시 메일 발송';
-      }
-    });
     $$('[data-wshare]', body).forEach(b => b.onclick = async () => {
       const w = list[+b.dataset.wshare];
       const atts = await attsOf(w);
@@ -205,35 +185,132 @@ const Admin = {
     });
     $$('[data-wok]', body).forEach(b => b.onclick = () => {
       const w = list[+b.dataset.wok];
-      const m = Modal.open(`<h3>확인 완료 처리</h3><form class="mform" id="wf">
-        <label>확인 내용 메모 <input id="wf-m" placeholder="예) 동명이인 확인 / 본인이 실수로 두 번 누름 → 1건 삭제" required></label>
-        <div class="modal-actions"><button type="button" class="btn ghost" id="wf-c">취소</button><button class="btn primary">저장</button></div></form>`, 'wide');
+      const m = Modal.open(`
+        <h3>✔ 경고 확인 완료 처리</h3>
+        <p class="modal-msg small" style="margin-bottom:.8rem">${esc(w.date)} · <b>${esc(w.unitLabel)} ${esc(w.name)}</b></p>
+        <div style="margin-bottom:1.1rem;padding:.9rem;background:#f0fdf4;border:1.5px solid #86efac;border-radius:12px;text-align:center">
+          <p style="margin:0 0 .5rem;font-size:.88rem;color:#166534;font-weight:700">문제가 없는 경우 아래 버튼을 누르면 즉시 ‘이상없음’으로 저장됩니다.</p>
+          <button type="button" class="btn primary" id="wf-no-issue" style="background:var(--green);width:100%;font-size:1.05rem;padding:.75em">✅ 이상없음 (즉시 저장)</button>
+        </div>
+        <form class="mform" id="wf">
+          <label>특이사항 메모 (특이사항이 있는 경우 입력)
+            <input id="wf-m" value="${esc(w.memo && w.memo !== '이상없음' ? w.memo : '')}" placeholder="예) 동명이인 확인 / 실수로 2회 촬영하여 1건 삭제함" required>
+          </label>
+          <div class="modal-actions">
+            <button type="button" class="btn ghost" id="wf-c">취소</button>
+            <button class="btn primary" type="submit">특이사항 저장</button>
+          </div>
+        </form>`, 'wide');
       $('#wf-c', m).onclick = () => Modal.close(m);
-      $('#wf', m).onsubmit = async e => { e.preventDefault(); await Store.resolveWarning(w.id, $('#wf-m', m).value.trim()); Modal.close(m); this.render(); };
+      $('#wf-no-issue', m).onclick = async () => {
+        await Store.resolveWarning(w.id, '이상없음');
+        Modal.close(m);
+        this.render();
+      };
+      $('#wf', m).onsubmit = async e => {
+        e.preventDefault();
+        await Store.resolveWarning(w.id, $('#wf-m', m).value.trim() || '이상없음');
+        Modal.close(m);
+        this.render();
+      };
     });
   },
 
-  /* ===================== 형제 관리 ===================== */
+  /* ===================== 형제 관리 (체크박스 선택 일괄 삭제 지원) ===================== */
   async tab_members(body) {
     const ms = (await Store.membersWithStats()).sort((a, b) => unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) || koSort(a, b));
-    body.innerHTML = `<div class="toolbar">${this.unitSelect('f-unit', true, this.fUnit || '')}
-      <input id="f-q" placeholder="이름 검색" value="${esc(this.fQ || '')}">
-      <button class="btn primary" id="add">＋ 형제 추가</button></div><div id="list"></div>`;
+    this.selectedMemberIds = this.selectedMemberIds || new Set();
+    // 이미 삭제된 ID 정리
+    const validIds = new Set(ms.map(m => m.id));
+    this.selectedMemberIds.forEach(id => { if (!validIds.has(id)) this.selectedMemberIds.delete(id); });
+
+    body.innerHTML = `
+      <div class="toolbar">
+        ${this.unitSelect('f-unit', true, this.fUnit || '')}
+        <input id="f-q" placeholder="이름 검색" value="${esc(this.fQ || '')}">
+        <button class="btn primary" id="add">＋ 형제 추가</button>
+        <button class="btn danger" id="del-sel" disabled>🗑 선택 삭제 (0명)</button>
+      </div>
+      <div id="list"></div>`;
+
+    const updateDelBtn = () => {
+      const cnt = this.selectedMemberIds.size;
+      const btn = $('#del-sel');
+      if (!btn) return;
+      btn.disabled = cnt === 0;
+      btn.textContent = `🗑 선택 삭제 (${cnt}명)`;
+    };
+
     const draw = () => {
-      this.fUnit = $('#f-unit').value; this.fQ = $('#f-q').value.trim();
+      this.fUnit = $('#f-unit').value;
+      this.fQ = $('#f-q').value.trim();
       const rows = ms.filter(m => (!this.fUnit || `${m.unit}|${m.company || ''}` === this.fUnit) && (!this.fQ || m.name.includes(this.fQ)));
-      $('#list').innerHTML = `<p class="muted">${rows.length}명</p><div class="tbl-wrap"><table class="tbl">
-        <thead><tr><th>소속</th><th>이름</th><th>전역일</th><th>누적</th><th>최근 출석</th><th></th></tr></thead>
-        <tbody>${rows.map(m => `<tr>
-          <td>${esc(unitLabel(m))}</td><td><b>${esc(m.name)}</b>${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
-          <td>${m.dischargeDate}</td><td>${m.total}</td><td>${m.last || '-'}</td>
-          <td class="nowrap"><button class="btn small ghost" data-hist="${m.id}">기록</button>
-            <button class="btn small ghost" data-edit="${m.id}">수정</button></td></tr>`).join('')}</tbody></table></div>`;
+      const allChecked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(m.id));
+
+      $('#list').innerHTML = `
+        <p class="muted">${rows.length}명 표시 중</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:40px;text-align:center"><input type="checkbox" id="chk-all" ${allChecked ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer" title="현재 목록 전체 선택"></th>
+                <th>소속</th><th>이름</th><th>전역일</th><th>누적</th><th>최근 출석</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${rows.map(m => `
+                <tr>
+                  <td style="text-align:center"><input type="checkbox" class="chk-mem" data-id="${m.id}" ${this.selectedMemberIds.has(m.id) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></td>
+                  <td>${esc(unitLabel(m))}</td>
+                  <td><b>${esc(m.name)}</b>${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
+                  <td>${m.dischargeDate}</td>
+                  <td>${m.total}</td>
+                  <td>${m.last || '-'}</td>
+                  <td class="nowrap">
+                    <button class="btn small ghost" data-hist="${m.id}">기록</button>
+                    <button class="btn small ghost" data-edit="${m.id}">수정</button>
+                  </td>
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`;
+
+      const chkAll = $('#chk-all');
+      if (chkAll) {
+        chkAll.onchange = e => {
+          rows.forEach(m => {
+            if (e.target.checked) this.selectedMemberIds.add(m.id);
+            else this.selectedMemberIds.delete(m.id);
+          });
+          draw();
+        };
+      }
+      $$('.chk-mem', $('#list')).forEach(cb => {
+        cb.onchange = e => {
+          if (e.target.checked) this.selectedMemberIds.add(cb.dataset.id);
+          else this.selectedMemberIds.delete(cb.dataset.id);
+          if (chkAll) chkAll.checked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(m.id));
+          updateDelBtn();
+        };
+      });
       $$('[data-hist]').forEach(b => b.onclick = () => this.history(ms.find(m => m.id === b.dataset.hist)));
       $$('[data-edit]').forEach(b => b.onclick = () => this.memberForm(ms.find(m => m.id === b.dataset.edit)));
+      updateDelBtn();
     };
-    $('#f-unit').onchange = draw; $('#f-q').oninput = draw;
+
+    $('#f-unit').onchange = draw;
+    $('#f-q').oninput = draw;
     $('#add').onclick = () => this.memberForm(null);
+    $('#del-sel').onclick = async () => {
+      const ids = [...this.selectedMemberIds];
+      if (!ids.length) return;
+      const names = ids.map(id => ms.find(x => x.id === id)?.name).filter(Boolean);
+      const previewNames = names.slice(0, 5).join(', ') + (names.length > 5 ? ` 외 ${names.length - 5}명` : '');
+      if (!await Modal.confirm(`선택한 <b>${ids.length}명</b>(${esc(previewNames)})의 모든 정보와 출석 기록·사진을 일괄 삭제할까요?<br><span class="red">삭제된 데이터는 복구할 수 없습니다.</span>`, '일괄 삭제')) return;
+      await Store.deleteMembersBatch(ids);
+      this.selectedMemberIds.clear();
+      this.render();
+    };
     draw();
   },
 

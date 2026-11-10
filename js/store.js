@@ -246,14 +246,22 @@ const Store = {
     return m;
   },
 
-  async deleteMember(id) {
-    await this.needBackendAuth();
+  async deleteMember(id, skipAuth = false) {
+    if (!skipAuth) await this.needBackendAuth();
     const atts = await DB.byIndex('attendance', 'memberId', id);
     for (const a of atts) { await DB.del('attendance', a.id); await DB.del('photos', a.id); }
     for (const g of await DB.byIndex('mileage', 'memberId', id)) await DB.del('mileage', g.id);
     await DB.del('members', id);
     if (typeof Backend !== 'undefined') {
       await Backend.enqueue('deleteMember', { id });
+    }
+  },
+
+  async deleteMembersBatch(ids) {
+    if (!ids || !ids.length) return;
+    await this.needBackendAuth();
+    for (const id of ids) {
+      await this.deleteMember(id, true);
     }
   },
 
