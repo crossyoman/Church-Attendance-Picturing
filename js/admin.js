@@ -7,6 +7,7 @@ const Admin = {
   reportCut: null,
   TABS: [
     ['report', '📊 주간 리포트'],
+    ['today', '📸 오늘의 출석자'],
     ['warnings', '⚠️ 경고'],
     ['members', '👥 형제 관리'],
     ['manual', '✍️ 수동 출석'],
@@ -85,17 +86,29 @@ const Admin = {
     $$('figure[data-url]', container).forEach(f => f.onclick = () => this.showPhoto(f.dataset.url, f.dataset.cap));
   },
 
-  /* ===================== 주간 리포트 (사용자 날짜 선택 + 출석엑셀 + 전체사진 + 24회달성자 일괄 발송) ===================== */
+  /* ===================== 주간 리포트 (기본값: 지금 시점 + 최근 주일 순서 선택 + 날짜 직접 지정) ===================== */
   async tab_report(body) {
     const today = todayStr();
-    const defaultStart = fmtDate(new Date(Date.now() - 6 * 864e5)); // 오늘 포함 최근 1주일(7일간)
-    if (!this.reportEnd) this.reportEnd = today;
-    if (!this.reportStart) this.reportStart = defaultStart;
+    const cuts = Report.recentCutoffs(12);
+    // 기본값을 '지금 시점(now)'으로 설정
+    const sel = this.reportCut || 'now';
+    if (!this.reportEnd || !this.reportStart) {
+      const refCut = sel === 'now' ? new Date() : (sel === 'custom' ? new Date() : new Date(+sel));
+      this.reportEnd = fmtDate(refCut);
+      this.reportStart = fmtDate(new Date(refCut.getTime() - 6 * 864e5));
+    }
 
     body.innerHTML = `
       <div class="card" style="margin-bottom:.8rem;padding:.9rem 1.1rem;background:#f8fafc;border:1.5px solid #cbd5e1">
-        <div class="toolbar" style="margin-bottom:0;gap:.6rem;align-items:center">
-          <b style="color:var(--navy)">📅 조회 기간 설정:</b>
+        <div class="toolbar" style="margin-bottom:.5rem;gap:.6rem;align-items:center">
+          <label style="font-weight:700;color:var(--navy)">기준:
+            <select id="cut" style="margin-left:.3rem">
+              <option value="now" ${sel === 'now' ? 'selected' : ''}>지금 시점 (기본 · 최근 1주일)</option>
+              ${cuts.map(c => `<option value="${c.getTime()}" ${String(c.getTime()) === sel ? 'selected' : ''}>${fmtDate(c)} (일) 13:00</option>`).join('')}
+              <option value="custom" ${sel === 'custom' ? 'selected' : ''}>직접 날짜 지정 (${esc(this.reportStart)} ~ ${esc(this.reportEnd)})</option>
+            </select>
+          </label>
+          <span style="color:#94a3b8">|</span>
           <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:700">
             시작일 <input type="date" id="rep-start" value="${esc(this.reportStart)}" max="${esc(today)}">
           </label>
@@ -103,43 +116,58 @@ const Admin = {
           <label style="display:inline-flex;align-items:center;gap:.35rem;font-weight:700">
             종료일 <input type="date" id="rep-end" value="${esc(this.reportEnd)}" max="${esc(today)}">
           </label>
-          <button class="btn ghost small" id="rep-1w" title="종료일 기준 최근 1주일(7일간)로 자동 설정">↺ 선택일 기준 1주일</button>
-          <button class="btn ghost small" id="rep-today" title="오늘 하루만 조회">오늘 하루</button>
         </div>
-        <p class="muted" style="margin:.45rem 0 0;font-size:.82rem">
-          ※ 종료일을 바꾸시면 자동으로 그 날부터 1주일 전 날짜가 시작일로 맞춰지며, 시작일과 종료일을 원하시는 날짜로 직접 변경하실 수도 있습니다.
+        <p class="muted" style="margin:0;font-size:.82rem">
+          ※ ‘기준’에서 <b>지금 시점</b>이나 <b>최근 주일</b>을 순서대로 고르시거나, 우측 달력에서 <b>몇 월 며칠부터 몇 월 며칠까지</b>를 직접 선택하실 수 있습니다. (종료일 선택 시 기본 1주일로 자동 세팅)
         </p>
       </div>
       <div class="toolbar">
-        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (출석엑셀 + 전체사진 + 24회달성자)</button>
+        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (출석엑셀 + 24회 달성자 사진)</button>
         <button class="btn ghost small" id="dl-week-xl">📊 출석·통계 엑셀(.xlsx) 다운로드</button>
-        <button class="btn ghost small" id="dl-week-photos">💾 기간 내 전체 사진 저장</button>
         <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
         💡 <b>리포트 메일 발송 안내</b>: 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면<br>
         ① <b>어느 부대 누가 출석했는지 + 날짜별 부대 통계 + 마일리지 현황이 담긴 엑셀 파일</b><br>
-        ② <b>선택한 기간에 촬영된 출석 사진 전체 + 24회 달성자 인증 사진</b>이 한꺼번에 메일에 첨부되어 발송됩니다. (부당수혜 점검 및 통계 확인용)
+        ② <b>24회 마일리지 달성자의 최근 24회분 인증 사진</b>이 첨부되어 발송됩니다.<br>
+        <span class="muted">(그날 예배 참석자들의 전체 사진 확인은 상단 <b>‘📸 오늘의 출석자’</b> 탭에서 한눈에 보실 수 있습니다.)</span>
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
 
+    const cutSelect = $('#cut');
     const startInput = $('#rep-start');
     const endInput = $('#rep-end');
 
-    // 종료일을 변경하면 기본적으로 종료일로부터 1주일(7일간)로 시작일 자동 세팅
+    cutSelect.onchange = e => {
+      const v = e.target.value;
+      this.reportCut = v;
+      if (v === 'now') {
+        const now = new Date();
+        this.reportEnd = fmtDate(now);
+        this.reportStart = fmtDate(new Date(now.getTime() - 6 * 864e5));
+      } else if (v !== 'custom') {
+        const dt = new Date(+v);
+        this.reportEnd = fmtDate(dt);
+        this.reportStart = fmtDate(new Date(dt.getTime() - 7 * 864e5));
+      }
+      this.render();
+    };
+
+    // 종료일을 바꾸면 종료일로부터 1주일(7일간)로 시작일 자동 세팅
     endInput.onchange = () => {
       const endVal = endInput.value || today;
       const [ey, em, ed] = endVal.split('-').map(Number);
       const endDt = new Date(ey, em - 1, ed);
-      const autoStartDt = new Date(endDt.getTime() - 6 * 864e5);
+      this.reportCut = 'custom';
       this.reportEnd = endVal;
-      this.reportStart = fmtDate(autoStartDt);
+      this.reportStart = fmtDate(new Date(endDt.getTime() - 6 * 864e5));
       this.render();
     };
 
-    // 시작일을 직접 바꾸면 사용자가 지정한 시작일~종료일 그대로 적용
+    // 시작일을 직접 바꾸면 사용자가 선택한 시작일~종료일 그대로 적용
     startInput.onchange = () => {
-      const sVal = startInput.value || defaultStart;
+      const sVal = startInput.value || today;
+      this.reportCut = 'custom';
       this.reportStart = sVal;
       if (this.reportEnd && sVal > this.reportEnd) {
         this.reportEnd = sVal;
@@ -147,35 +175,26 @@ const Admin = {
       this.render();
     };
 
-    $('#rep-1w').onclick = () => {
-      const endVal = endInput.value || today;
-      const [ey, em, ed] = endVal.split('-').map(Number);
-      const endDt = new Date(ey, em - 1, ed);
-      this.reportEnd = endVal;
-      this.reportStart = fmtDate(new Date(endDt.getTime() - 6 * 864e5));
-      this.render();
-    };
+    let r;
+    if (sel === 'custom') {
+      r = await Report.build(null, this.reportStart, this.reportEnd);
+    } else {
+      const cutDate = sel === 'now' ? new Date() : new Date(+sel);
+      r = await Report.build(cutDate);
+    }
 
-    $('#rep-today').onclick = () => {
-      this.reportStart = today;
-      this.reportEnd = today;
-      this.render();
-    };
-
-    const r = await Report.build(null, this.reportStart, this.reportEnd);
     const text = Report.text(r);
-    const title = `[${CONFIG.churchName}] 예배 출석 리포트 및 통계 (${r.startDateStr} ~ ${r.endDateStr})`;
-    const periodPhotoCount = (r.periodAtts || []).filter(a => a.hasPhoto).length;
+    const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 (${fmtDate(r.cutoff)})`;
 
     $('#rep').innerHTML = `
       <h3>기간: ${Report.periodText(r)}</h3>
       <h3>📋 날짜별 · 부대별 출석 현황</h3>
       ${this.statsTable(r.stats)}
 
-      <h3>📸 선택 기간 예배 출석자 명단 및 촬영 사진 (총 ${(r.periodAtts || []).length}명 / 사진 ${periodPhotoCount}장)</h3>
+      <h3>📋 기간 내 예배 출석자 명단 (총 ${(r.periodAtts || []).length}명)</h3>
       ${(r.periodAtts || []).length ? `
         <div class="card">
-          <div class="tbl-wrap" style="max-height:320px;overflow-y:auto">
+          <div class="tbl-wrap" style="max-height:280px;overflow-y:auto">
             <table class="tbl">
               <thead><tr><th>연번</th><th>날짜 · 시간</th><th>소속부대</th><th>이름</th><th>전역일</th><th>누적출석</th><th>구분</th></tr></thead>
               <tbody>
@@ -193,12 +212,8 @@ const Admin = {
               </tbody>
             </table>
           </div>
-          <details style="margin-top:.8rem" open>
-            <summary>선택 기간 촬영된 전체 출석 사진 보기 (${periodPhotoCount}장 - 부당수혜/대리출석 점검)</summary>
-            <div class="thumbs" id="period-thumbs"><p class="muted">사진 불러오는 중…</p></div>
-          </details>
         </div>
-      ` : '<p class="muted">선택한 기간에 출석한 인원이 없습니다.</p>'}
+      ` : '<p class="muted">이 기간에 출석한 인원이 없습니다.</p>'}
 
       <h3>🎖 ${CONFIG.mileageUnit}회 단위 마일리지 달성자 (${r.achievers.length}건)</h3>
       ${r.achievers.length ? r.achievers.map((a, i) => `
@@ -219,8 +234,6 @@ const Admin = {
 
       <details><summary>메일 본문 미리보기</summary><pre class="pre">${esc(text)}</pre></details>`;
 
-    const pThumbs = $('#period-thumbs');
-    if (pThumbs) await this.fillThumbs(pThumbs, r.periodAtts);
     for (const el of $$('.ach-thumbs', $('#rep'))) {
       await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
     }
@@ -238,36 +251,179 @@ const Admin = {
       downloadBlob(xlFile, xlFile.name);
     };
 
-    $('#dl-week-photos').onclick = async () => {
-      const pFiles = await photoFiles(r.periodAtts || []);
-      if (!pFiles.length) return Modal.alert('선택한 기간에 저장된 사진이 없습니다.');
-      await downloadFiles(pFiles);
-    };
-
-    // 메일 첨부용 엑셀 파일(.csv / .xlsx) 및 전체 출석 사진을 미리 준비하여 터치 즉시 Gmail 공유창에 엑셀+사진이 함께 첨부되게 처리
-    const combinedAtts = [...(r.periodAtts || [])];
-    for (const a of r.achievers) combinedAtts.push(...(a.block || []));
+    // 메일 발송 시 사진은 마일리지 달성자의 최근 24회 인증 사진만 첨부 + 출석·통계 엑셀 파일 함께 첨부
+    const achieverAtts = [];
+    for (const a of r.achievers) achieverAtts.push(...(a.block || []));
     const csvExcelFile = Report.buildWeeklyCsvFile(r);
     const xlFileReady = await Report.buildWeeklyExcelFile(r);
-    const preloadedPhotos = await photoFiles(combinedAtts);
+    const achieverPhotoFiles = await photoFiles(achieverAtts);
 
-    // 기기 브라우저가 .xlsx 공유를 허용하면 .xlsx + 전체사진, 안드로이드 크롬처럼 .xlsx를 막으면 엑셀 호환 .csv + 전체사진으로 자동 구성
-    let shareFiles = [csvExcelFile, ...preloadedPhotos].filter(Boolean);
+    // 기기 브라우저가 .xlsx 공유를 허용하면 .xlsx + 달성자 24회 사진, 안드로이드 크롬처럼 .xlsx를 막으면 엑셀 호환 .csv + 달성자 24회 사진으로 자동 구성
+    let shareFiles = [csvExcelFile, ...achieverPhotoFiles].filter(Boolean);
     if (xlFileReady && typeof navigator.canShare === 'function') {
       try {
-        if (navigator.canShare({ files: [xlFileReady, ...preloadedPhotos] })) {
-          shareFiles = [xlFileReady, ...preloadedPhotos];
-        } else if (navigator.canShare({ files: [csvExcelFile, ...preloadedPhotos] })) {
-          shareFiles = [csvExcelFile, ...preloadedPhotos];
+        if (navigator.canShare({ files: [xlFileReady, ...achieverPhotoFiles] })) {
+          shareFiles = [xlFileReady, ...achieverPhotoFiles];
+        } else if (navigator.canShare({ files: [csvExcelFile, ...achieverPhotoFiles] })) {
+          shareFiles = [csvExcelFile, ...achieverPhotoFiles];
         }
       } catch (e) {}
     }
 
     $('#share-all').onclick = () => {
       // 클릭 이벤트 안에서 await 없이 즉시 shareReport를 호출해야 안드로이드 크롬이 사용자 터치로 인정하여 Gmail 공유창을 띄움
-      shareReport(title, text, shareFiles, xlFileReady ? [xlFileReady, ...preloadedPhotos] : [csvExcelFile, ...preloadedPhotos]);
+      shareReport(title, text, shareFiles, xlFileReady ? [xlFileReady, ...achieverPhotoFiles] : [csvExcelFile, ...achieverPhotoFiles]);
     };
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
+  },
+
+  /* ===================== 📸 오늘의 출석자 (선택한 날짜의 예배 참석자 전체 사진을 한눈에 확인) ===================== */
+  async tab_today(body) {
+    const today = todayStr();
+    const people = await Store.allPeopleFull();
+    const allAtts = [];
+    people.forEach(p => {
+      const base = p.baseCount || 0;
+      (p.atts || []).forEach((a, idx) => {
+        allAtts.push({
+          ...a,
+          person: p,
+          label: unitLabel(p),
+          memberName: p.name,
+          dischargeDate: p.dischargeDate,
+          discharged: !!p.discharged,
+          cumCount: base + idx + 1,
+        });
+      });
+    });
+
+    // 출석 기록이 있는 날짜 목록 (최신순)
+    const worshipDates = [...new Set(allAtts.map(a => a.date))].sort((a, b) => b.localeCompare(a));
+    if (!this.todayViewDate) {
+      this.todayViewDate = worshipDates.includes(today) ? today : (worshipDates[0] || today);
+    }
+
+    body.innerHTML = `
+      <div class="card" style="margin-bottom:.8rem;padding:.9rem 1.1rem;background:#f8fafc;border:1.5px solid #cbd5e1">
+        <div class="toolbar" style="margin-bottom:0;gap:.6rem;align-items:center">
+          <b style="color:var(--navy)">📅 예배 날짜 선택:</b>
+          <input type="date" id="td-date" value="${esc(this.todayViewDate)}" max="${esc(today)}">
+          <select id="td-recent" title="예배 기록이 있는 최근 날짜 바로 선택">
+            <option value="">최근 예배일 바로가기 (${worshipDates.length}일)</option>
+            ${worshipDates.slice(0, 30).map(d => {
+              const cnt = allAtts.filter(x => x.date === d).length;
+              return `<option value="${d}" ${d === this.todayViewDate ? 'selected' : ''}>${d} (${weekdayOf(d)}) · ${cnt}명 출석</option>`;
+            }).join('')}
+          </select>
+          <button class="btn ghost small" id="td-go-today">오늘 (${today})</button>
+          ${this.unitSelect('td-unit', true, this.tdUnit || '')}
+          <input id="td-q" placeholder="이름 검색" value="${esc(this.tdQ || '')}" style="max-width:150px">
+        </div>
+      </div>
+      <div id="td-summary"></div>
+      <div id="td-gallery"></div>`;
+
+    const drawToday = async () => {
+      const selDate = $('#td-date').value || today;
+      this.todayViewDate = selDate;
+      this.tdUnit = $('#td-unit').value;
+      this.tdQ = $('#td-q').value.trim();
+
+      const dayAll = allAtts
+        .filter(a => a.date === selDate)
+        .sort((a, b) => unitOrder(a.label) - unitOrder(b.label) || a.time.localeCompare(b.time) || a.memberName.localeCompare(b.memberName, 'ko'));
+
+      const filtered = dayAll.filter(a => {
+        if (this.tdUnit) {
+          const uStr = `${a.person.unit}|${a.person.company || ''}`;
+          if (uStr !== this.tdUnit) return false;
+        }
+        if (this.tdQ && !a.memberName.includes(this.tdQ)) return false;
+        return true;
+      });
+
+      // 부대별 요약 배지
+      const unitCounts = allUnitLabels()
+        .map(u => ({ label: u.label, count: dayAll.filter(a => a.label === u.label).length }))
+        .filter(u => u.count > 0);
+
+      $('#td-summary').innerHTML = `
+        <div class="card" style="margin-bottom:.8rem">
+          <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
+            <h3 style="margin:0">📸 ${selDate} (${weekdayOf(selDate)}) 예배 출석자 — 총 <span style="color:var(--navy)">${dayAll.length}명</span> ${filtered.length !== dayAll.length ? `(검색 ${filtered.length}명)` : ''}</h3>
+            ${dayAll.length ? `<button class="btn ghost small" id="td-dl-photos">💾 이 날 출석 사진 전체 저장 (${dayAll.filter(a => a.hasPhoto).length}장)</button>` : ''}
+          </div>
+          ${unitCounts.length ? `
+            <div class="chips" style="margin-top:.6rem">
+              ${unitCounts.map(u => `<span style="font-weight:700;background:#e2e8f0;color:#1e293b">${esc(u.label)}: <b>${u.count}명</b></span>`).join('')}
+            </div>` : ''}
+        </div>`;
+
+      const dlBtn = $('#td-dl-photos');
+      if (dlBtn) {
+        dlBtn.onclick = async () => {
+          const files = await photoFiles(dayAll);
+          if (!files.length) return Modal.alert('이 날짜에 저장된 사진이 없습니다.');
+          await downloadFiles(files);
+        };
+      }
+
+      if (!filtered.length) {
+        $('#td-gallery').innerHTML = `<div class="card"><p class="muted" style="text-align:center;padding:2rem 0">${selDate} (${weekdayOf(selDate)})에는 출석 기록이 없습니다.</p></div>`;
+        return;
+      }
+
+      $('#td-gallery').innerHTML = `
+        <div class="hist-grid">
+          ${filtered.map((a, idx) => `
+            <div class="hist-card td-att-card" data-id="${a.id}">
+              <div class="hist-card-head">
+                <div>
+                  <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
+                  <b style="font-size:1.05rem">${esc(a.label)} ${esc(a.memberName)}</b>
+                  <div class="muted" style="font-size:.82rem;margin-top:.2rem">
+                    ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
+                    ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
+                  </div>
+                </div>
+                <button class="btn small danger" data-td-del="${a.id}">삭제</button>
+              </div>
+              <div class="hist-th"><p class="muted">사진 불러오는 중…</p></div>
+            </div>
+          `).join('')}
+        </div>`;
+
+      for (const card of $$('.td-att-card', $('#td-gallery'))) {
+        const a = filtered.find(x => x.id === card.dataset.id);
+        if (a) await this.fillThumbs($('.hist-th', card), [a]);
+      }
+
+      $$('[data-td-del]', $('#td-gallery')).forEach(b => b.onclick = async () => {
+        const target = filtered.find(x => x.id === b.dataset.tdDel);
+        if (!await Modal.confirm(`<b>${esc(target ? target.label + ' ' + target.memberName : '')}</b> 형제의 ${selDate} 출석 기록(사진 포함)을 삭제할까요?`, '출석 삭제')) return;
+        await Store.deleteAttendance(b.dataset.tdDel);
+        this.render();
+      });
+    };
+
+    $('#td-date').onchange = () => {
+      $('#td-recent').value = $('#td-date').value;
+      drawToday();
+    };
+    $('#td-recent').onchange = e => {
+      if (!e.target.value) return;
+      $('#td-date').value = e.target.value;
+      drawToday();
+    };
+    $('#td-go-today').onclick = () => {
+      $('#td-date').value = today;
+      $('#td-recent').value = worshipDates.includes(today) ? today : '';
+      drawToday();
+    };
+    $('#td-unit').onchange = drawToday;
+    $('#td-q').oninput = drawToday;
+
+    await drawToday();
   },
 
   statsTable(st) {

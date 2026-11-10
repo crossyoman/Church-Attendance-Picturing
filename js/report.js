@@ -1,7 +1,7 @@
 /* =========================================================
- * 주간 리포트 (사용자 지정 날짜 기간 지원: 기본 1주일)
- * - 24회 배수 달성자 + 사진촬영 전 출석 분리 표기
- * - 기간 내 전체 출석자 명단, 날짜별·부대별 통계, 전체 촬영 사진 및 엑셀 생성
+ * 주간 리포트 (기본값: 지금 시점 / 최근 주일 선택 + 날짜 직접 지정 지원)
+ * - 메일 사진 첨부: 24회 마일리지 달성자의 최근 24회 인증 사진만 첨부
+ * - 출석자 전체 명단 및 날짜별·부대별 통계는 엑셀 파일(.xlsx / .csv) 및 본문에 포함
  * ========================================================= */
 const Report = {
   /** ref 시점 기준 가장 최근의 '일요일 13:00' */
@@ -22,6 +22,7 @@ const Report = {
   /**
    * 기간별 리포트 계산
    * - startDateStr, endDateStr ('YYYY-MM-DD')가 주어지면 해당 날짜 범위(시작일 00:00:00 ~ 종료일 23:59:59) 기준으로 집계
+   * - 그렇지 않으면 cutoff 시점으로부터 직전 7일간(일요일 13:00 기준 또는 지금 시점 기준 1주일)으로 집계
    */
   async build(cutoffOrEnd, startDateStr = null, endDateStr = null) {
     const U = CONFIG.mileageUnit;
@@ -32,7 +33,7 @@ const Report = {
       const [ey, em, ed] = endDateStr.split('-').map(Number);
       prev = new Date(sy, sm - 1, sd, 0, 0, 0, 0);
       cutoff = new Date(ey, em - 1, ed, 23, 59, 59, 999);
-      start = prev.getTime() - 1; // 시작일 00:00:00 포함을 위해 -1ms
+      start = prev.getTime() - 1;
       end = cutoff.getTime();
     } else {
       cutoff = cutoffOrEnd instanceof Date ? cutoffOrEnd : new Date();
@@ -65,7 +66,7 @@ const Report = {
     }
     achievers.sort((a, b) => unitOrder(unitLabel(a.person)) - unitOrder(unitLabel(b.person)) || koSort(a.person, b.person));
 
-    // 선택된 기간 동안 출석한 전체 기록 (부대별 누가 출석했는지 + 촬영 사진 전체)
+    // 선택된 기간 동안 출석한 전체 기록 (부대별 누가 출석했는지)
     const inWin = [];
     people.forEach(p => {
       const base = p.baseCount || 0;
@@ -129,10 +130,11 @@ const Report = {
 
   /** 이메일 본문용 텍스트 */
   text(r) {
+    const achPhotoCount = (r.achievers || []).reduce((sum, a) => sum + (a.block || []).filter(b => b.hasPhoto).length, 0);
     const L = [];
     L.push(`[${CONFIG.churchName} 주간 예배 출석 리포트 및 통계]`);
     L.push(`기간: ${this.periodText(r)}`);
-    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일  2) 기간 내 촬영 출석사진 전체 (${(r.periodAtts || []).filter(a => a.hasPhoto).length}장)`);
+    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일  2) 24회 마일리지 달성자 최근 24회 인증 사진 (${achPhotoCount}장)`);
     L.push('');
     L.push(`■ ${CONFIG.mileageUnit}회 마일리지 달성자 (${r.achievers.length}명)`);
     if (!r.achievers.length) {
@@ -209,8 +211,7 @@ const Report = {
 
   /**
    * 안드로이드 Gmail 앱 100% 직접 첨부 호환용 CSV 엑셀 파일 생성
-   * - 주의: MIME 타입에 ';charset=utf-8' 파라미터를 붙이면 안드로이드 Chrome navigator.share가 거부하므로
-   *   반드시 순수 'text/csv'로 지정하고 UTF-8 BOM('\uFEFF')을 앞에 붙여 엑셀에서 한글이 완벽히 열리게 함
+   * - 순수 'text/csv' + UTF-8 BOM('\uFEFF')을 앞에 붙여 엑셀에서 한글 깨짐 없이 바로 열림
    */
   buildWeeklyCsvFile(r) {
     const escCsv = v => {
