@@ -1,4 +1,7 @@
 /**
+ * @OnlyCurrentDoc
+ */
+/**
  * ============================================================================
  * 천군교회 예배 출석체크 - Google Apps Script 백엔드 (Code.gs)
  * ============================================================================
@@ -298,15 +301,9 @@ function handleAction(action, p, authPw) {
  * ============================================================================ */
 
 function getOrCreateDb() {
-  const props = PropertiesService.getScriptProperties();
-  let ssId = props.getProperty('DB_SPREADSHEET_ID');
-  let ss = null;
-  if (ssId) {
-    try { ss = SpreadsheetApp.openById(ssId); } catch (e) { ss = null; }
-  }
+  const ss = SpreadsheetApp.getActiveSpreadsheet();
   if (!ss) {
-    ss = SpreadsheetApp.create(APP_CONFIG.dbFileName);
-    props.setProperty('DB_SPREADSHEET_ID', ss.getId());
+    throw new Error('구글 스프레드시트 화면의 [확장 프로그램] -> [Apps Script]에서 실행해 주세요.');
   }
 
   Object.keys(SHEET_DEFS).forEach(name => {
@@ -1153,7 +1150,7 @@ function getServerStatus() {
     warningCount: readAllObjects('warnings').filter(w => !w.resolved).length,
     dischargedCount: readAllObjects('discharged').length,
     adminEmail: settings.adminEmail,
-    senderEmail: Session.getEffectiveUser().getEmail() || settings.senderEmail,
+    senderEmail: settings.senderEmail,
     hasWeeklyTrigger: hasWeeklyTrigger,
     lastWeeklyReportSentAt: settings.lastWeeklyReportSentAt || null,
     syncRev: getSyncRev(),
