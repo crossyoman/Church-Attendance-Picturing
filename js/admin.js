@@ -307,16 +307,19 @@ const Admin = {
     };
   },
 
-  /** 출석 기록 보기 (readOnly: 전역자) */
+  /** 출석 기록 보기 (readOnly: 전역자) - 클릭 없이 전체 사진이 한눈에 보이도록 대형 갤러리 창으로 표시 */
   async history(m, readOnly = false) {
     const atts = (m.atts || []).slice().sort((a, b) => b.ts - a.ts);
-    const w = Modal.open(`<h3>${esc(unitLabel(m))} ${esc(m.name)} · 출석 기록</h3>
-      <p class="modal-msg small">누적 ${m.total}회 (도입 전 ${m.baseCount || 0}회 + 기록 ${atts.length}회) · 전역 ${m.dischargeDate}</p>
-      <div class="hist">${atts.map(a => `<div class="hist-row" data-id="${a.id}">
+    const w = Modal.open(`<h3>${esc(unitLabel(m))} ${esc(m.name)} · 출석 기록 전체보기</h3>
+      <p class="modal-msg small">누적 <b>${m.total}회</b> (사진촬영 전 ${m.baseCount || 0}회 + 시스템 기록 ${atts.length}회) · 전역일 ${m.dischargeDate}</p>
+      <div class="hist-grid">${atts.map(a => `<div class="hist-card hist-row" data-id="${a.id}">
+        <div class="hist-card-head">
+          <div class="hist-info"><b>${a.date} (${weekdayOf(a.date)}) ${a.time}</b>${a.manual ? ` <span class="badge">수동</span> <span class="muted">${esc(a.reason)}</span>` : ''}</div>
+          ${readOnly ? '' : `<button class="btn small danger" data-del="${a.id}">삭제</button>`}
+        </div>
         <div class="hist-th"></div>
-        <div class="hist-info"><b>${a.date} (${weekdayOf(a.date)}) ${a.time}</b>${a.manual ? `<br><span class="badge">수동</span> ${esc(a.reason)}` : ''}</div>
-        ${readOnly ? '' : `<button class="btn small danger" data-del="${a.id}">삭제</button>`}</div>`).join('') || '<p class="muted">기록 없음</p>'}</div>
-      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'wide');
+      </div>`).join('') || '<p class="muted">출석 기록이 없습니다.</p>'}</div>
+      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'xwide');
     w.querySelector('[data-ok]').onclick = () => Modal.close(w);
     for (const row of $$('.hist-row', w)) {
       const a = atts.find(x => x.id === row.dataset.id);

@@ -81,13 +81,13 @@ input, select, textarea { font: inherit; }
 .hint { color: var(--muted); font-size: .9rem; margin: 0; }
 
 /* ---------- 카메라 ---------- */
-.cam-wrap { position: relative; width: min(94vw, 540px); height: min(78vh, 720px); aspect-ratio: 3/4; margin: .8rem auto 0; border-radius: var(--radius);
+.cam-wrap { position: relative; width: min(94vw, 520px); max-height: 74vh; aspect-ratio: 3/4; margin: .6rem auto 0; border-radius: var(--radius);
   overflow: hidden; background: #000; box-shadow: 0 8px 30px rgba(0,0,0,.35); }
-.cam-wrap video { width: 100%; height: 100%; object-fit: cover; transform: scaleX(-1); }
-.cam-wrap .preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; background: #000; }
-.face-guide { position: absolute; left: 50%; top: 28%; width: 44%; aspect-ratio: 1/1.22; transform: translate(-50%, -50%);
+.cam-wrap video { width: 100%; height: 100%; object-fit: contain; background: #000; transform: scaleX(-1); }
+.cam-wrap .preview { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: contain; background: #000; }
+.face-guide { position: absolute; left: 50%; top: 27%; width: 38%; aspect-ratio: 1/1.22; transform: translate(-50%, -50%);
   border: 3.5px dashed rgba(255,255,255,.85); border-radius: 50%; pointer-events: none; box-shadow: 0 0 0 9999px rgba(0,0,0,.22); }
-.nametag-guide { position: absolute; left: 14%; top: 56%; width: 34%; height: 16%;
+.nametag-guide { position: absolute; right: 3%; left: auto; top: 64%; width: 38%; height: 15%;
   border: 2.5px dashed #ffd76a; border-radius: 10px; background: rgba(217,164,65,.18);
   display: flex; align-items: center; justify-content: center; color: #fff; font-size: .82rem; font-weight: 800;
   text-shadow: 0 2px 6px rgba(0,0,0,.85); pointer-events: none; text-align: center; line-height: 1.3; }
@@ -212,3 +212,18 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
 .slot-grid.achieved { border-color: #eab308; background: #fefce8; }
 .slot-grid .slot-title { font-weight: 800; color: #1e3a8a; }
 
+
+/* 완료 화면: 확인 버튼 상단 2배 확대 + 다시찍기/기록취소 하단 소형 배치 */
+.done-actions-stack { display: flex; flex-direction: column; align-items: center; gap: 1rem; margin: 1.2rem 0 .8rem; }
+.done-ok-giant { width: min(86vw, 24rem); font-size: 2.1rem; padding: .85em 1.8em; border-radius: 20px; font-weight: 900;
+  box-shadow: 0 8px 24px rgba(31,58,95,.32); letter-spacing: .04em; }
+.done-sub-actions { display: flex; justify-content: center; gap: .75rem; }
+.done-sub-actions .btn.small { font-size: .82rem; padding: .42em .85em; opacity: .9; }
+
+/* 형제관리 -> 기록 전체 사진 보기 대형 모달 */
+.modal.xwide { width: min(96vw, 78rem); max-height: 92vh; text-align: left; }
+.hist-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(290px, 1fr)); gap: 1rem; margin: .8rem 0; }
+.hist-card { border: 1px solid #d1d5db; border-radius: 14px; padding: .8rem; background: #f8fafc; display: flex; flex-direction: column; gap: .55rem; box-shadow: 0 2px 6px rgba(0,0,0,.04); }
+.hist-card-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
+.hist-card .hist-th .thumbs { display: block; margin: 0; }
+.hist-card .hist-th figure img { width: 100%; height: auto; aspect-ratio: auto; object-fit: contain; border-radius: 10px; background: #0f172a; max-height: 520px; }

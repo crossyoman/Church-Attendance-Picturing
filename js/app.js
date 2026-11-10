@@ -359,10 +359,12 @@ const App = {
           <p class="done-msg">예배 오신 것을 환영합니다!<br>오늘도 주님이 만나주실 거예요!</p>
           <p class="done-count"><b>${esc(member.name)}</b> 형제님, 오늘로 <b class="num">${total}</b>번째 예배에 오셨군요!</p>
           ${extra}
-          <div class="done-actions">
-            <button class="btn ghost" id="done-retake">↺ 다시 찍기</button>
-            <button class="btn ghost danger-text" id="done-cancel">✕ 기록 취소</button>
-            <button class="btn primary xl" id="done-ok">확인</button>
+          <div class="done-actions-stack">
+            <button class="btn primary done-ok-giant" id="done-ok">✔ 확인</button>
+            <div class="done-sub-actions">
+              <button class="btn ghost small" id="done-retake">↺ 다시 찍기</button>
+              <button class="btn ghost small danger-text" id="done-cancel">✕ 기록 취소</button>
+            </div>
           </div>
           <p class="hint">사진이 잘못 나왔다면 ‘다시 찍기’를, 이름을 잘못 골랐다면 ‘기록 취소’를 눌러 주세요.</p>
         </div>
