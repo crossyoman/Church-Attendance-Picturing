@@ -428,6 +428,10 @@ const Store = {
           achievedDate = atts[idxInAtts].date;
         } else if (m.baseLastDate) {
           achievedDate = m.baseLastDate;
+        } else if (atts.length) {
+          achievedDate = atts[atts.length - 1].date;
+        } else {
+          achievedDate = m.createdAt || todayStr();
         }
       }
       byStage[s] = {

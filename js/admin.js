@@ -28,6 +28,20 @@ const Admin = {
   async render() {
     this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
     const open = (await Store.warnings()).filter(w => !w.resolved).length;
+    // 미건의 마일리지 대상자 수 계산하여 [🎖 마일리지] 탭에 배지로 표시
+    let pendingMilCount = 0;
+    try {
+      const [msAll, grAll] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
+      const gMap = {};
+      grAll.forEach(g => (gMap[g.memberId] = gMap[g.memberId] || []).push(g));
+      msAll.forEach(m => {
+        const slots = Store.getMemberSlots(m, gMap[m.id]);
+        const earned = Math.min(5, Math.floor(m.total / CONFIG.mileageUnit));
+        const granted = slots.filter(sl => sl.proposedDate).length;
+        if (earned > granted) pendingMilCount += (earned - granted);
+      });
+    } catch (e) {}
+
     const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
     const pending = isConn ? await Backend.pendingCount() : 0;
     const syncBadge = isConn
@@ -40,7 +54,7 @@ const Admin = {
           <button class="btn ghost" id="adm-exit">🔒 잠그고 나가기</button>
         </div>
       </header>
-      <nav class="tabs">${this.TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === this.tab ? 'on' : ''}">${l}${k === 'warnings' && open ? ` <span class="badge" style="background:var(--red)">${open}</span>` : ''}</button>`).join('')}</nav>
+      <nav class="tabs">${this.TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === this.tab ? 'on' : ''}">${l}${k === 'warnings' && open ? ` <span class="badge" style="background:var(--red)">${open}</span>` : ''}${k === 'mileage' && pendingMilCount ? ` <span class="badge" style="background:#dc2626;color:#fff">미건의 ${pendingMilCount}</span>` : ''}</button>`).join('')}</nav>
       <section class="adm-body" id="body"><p class="muted">불러오는 중…</p></section></div>`);
     $('#adm-exit').onclick = () => { if (typeof Backend !== 'undefined') Backend.lockSession(); App.home(); };
     $('#adm-sync-badge').onclick = () => this.open('settings');
@@ -229,6 +243,7 @@ const Admin = {
           <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
             <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송 (최근 24회 사진)</button>
+            <button class="btn small primary" style="background:var(--green)" data-ach-grant="${a.person.id}">🎖 건의일 입력/조치 (언제부·언제 건의)</button>
             <button class="btn small ghost" data-dl="${i}">💾 이 형제 24회 사진(${a.block.filter(b => b.hasPhoto).length}장) 저장</button>
           </div>
         </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 새로 달성한 형제가 없습니다.</p>'}
@@ -253,6 +268,14 @@ const Admin = {
       shareReport(`${title} - ${a.person.name}(${a.milestone}회 달성)`, Report.text(one), pFiles, pFiles);
     });
     $$('[data-dl]').forEach(b => b.onclick = () => downloadFiles(achieverPhotoListByIdx[+b.dataset.dl] || []));
+    $$('[data-ach-grant]').forEach(b => b.onclick = async () => {
+      const mId = b.dataset.achGrant;
+      const m = await Store.memberWithStats(mId);
+      if (!m) return Modal.alert('전역 처리되었거나 찾을 수 없는 형제입니다.');
+      const grants = await Store.grantsOf(mId);
+      const slots = Store.getMemberSlots(m, grants);
+      this.openMileageModal({ m, slots });
+    });
 
     const csvExcelFile = Report.buildWeeklyCsvFile(r);
     const xlFileReady = await Report.buildWeeklyExcelFile(r);
@@ -755,9 +778,10 @@ const Admin = {
     });
   },
 
-  /* ===================== 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ===================== */
+  /* ===================== 마일리지 (미건의 대상자 즉시 조치 + 1~5차 기준일·건의일 관리) ===================== */
   async tab_mileage(body) {
     const U = CONFIG.mileageUnit;
+    const today = todayStr();
     const [ms, grants] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
     const G = {};
     grants.forEach(g => (G[g.memberId] = G[g.memberId] || []).push(g));
@@ -766,15 +790,86 @@ const Admin = {
       const slots = Store.getMemberSlots(m, G[m.id]);
       const upTo = Store.grantedUpTo(m, G[m.id]);
       const earned = Math.min(5, Math.floor(m.total / U));
-      const granted = slots.filter(sl => sl.proposedDate || sl.baseDate).length;
-      const pending = Math.max(0, earned - granted);
-      return { m, slots, upTo, earned, granted, pending };
+      // 건의일(proposedDate)까지 입력되어야 건의 완료로 인정
+      const granted = slots.filter(sl => sl.proposedDate).length;
+      const pendingSlots = slots.filter(sl => m.total >= sl.count && !sl.proposedDate);
+      const pending = pendingSlots.length;
+      return { m, slots, upTo, earned, granted, pending, pendingSlots };
     }).sort((a, b) => b.pending - a.pending || unitOrder(unitLabel(a.m)) - unitOrder(unitLabel(b.m)) || koSort(a.m, b.m));
 
+    // 미건의 항목(용사별 미건의 차수) 추출
+    const pendingItems = [];
+    allRows.forEach(r => {
+      r.pendingSlots.forEach(sl => {
+        pendingItems.push({
+          member: r.m,
+          rowObj: r,
+          stage: sl.stage,
+          count: sl.count,
+          // 언제부(기준일): 기존 입력된 기준일 또는 24/48/72/96/120회째 달성 예배일 자동 세팅
+          autoBaseDate: sl.baseDate || sl.achievedDate || today,
+          autoPropDate: today,
+        });
+      });
+    });
+
     body.innerHTML = `
+      <div class="card" style="border:2px solid ${pendingItems.length ? '#dc2626' : '#16a34a'};background:${pendingItems.length ? '#fff5f5' : '#f0fdf4'};margin-bottom:1.1rem">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.6rem">
+          <h3 style="margin:0;color:${pendingItems.length ? '#b91c1c' : '#166534'}">
+            ${pendingItems.length
+              ? `🚨 미건의 대상자 조치 (${pendingItems.length}건) — 언제부로(기준일) 언제 건의신청(건의일)하는지 바로 입력·저장하세요`
+              : `✅ 현재 미건의 대상자가 없습니다 (모든 24회 단위 달성자 건의 완료)`}
+          </h3>
+          ${pendingItems.length > 1 ? `<button class="btn primary small" id="apply-all-pending" style="background:#dc2626">✔ 아래 ${pendingItems.length}건 일괄 건의완료 저장</button>` : ''}
+        </div>
+        ${pendingItems.length ? `
+          <p class="hint" style="margin:0 0 .7rem;color:#7f1d1d">
+            ※ <b>‘언제부(기준일)’</b>는 해당 회차(24/48/72/96/120회)를 달성한 예배 날짜가 <b>자동으로 채워지며 직접 수정도 가능</b>합니다.<br>
+            ※ <b>‘언제 건의신청(건의일)’</b>은 오늘 날짜(${fmtYYMMDD(today)})가 기본으로 들어가며, 원하는 날짜로 바꾼 뒤 <b>[✔ 건의완료 저장]</b>을 누르면 즉시 조치됩니다.
+          </p>
+          <div class="tbl-wrap">
+            <table class="tbl" style="background:#fff;border-radius:10px;overflow:hidden">
+              <thead>
+                <tr style="background:#fee2e2;color:#7f1d1d">
+                  <th>소속부대 · 이름</th>
+                  <th>전역일</th>
+                  <th>현재 누적</th>
+                  <th>달성 차수</th>
+                  <th>📅 언제부 (기준일: 자동/수정가능)</th>
+                  <th>📅 언제 건의신청 (건의일)</th>
+                  <th>조치</th>
+                </tr>
+              </thead>
+              <tbody>
+                ${pendingItems.map((it, idx) => `
+                  <tr class="pend-item-row" data-mid="${it.member.id}" data-stage="${it.stage}">
+                    <td><b>${esc(unitLabel(it.member))} ${esc(it.member.name)}</b></td>
+                    <td>${fmtYYMMDD(it.member.dischargeDate)}</td>
+                    <td><b>${it.member.total}회</b></td>
+                    <td><span class="badge" style="background:#dc2626;color:#fff">${it.stage}차 (${it.count}회)</span></td>
+                    <td>
+                      <input type="date" class="pend-base" value="${esc(it.autoBaseDate)}" style="padding:.35rem .5rem;font-weight:700;border:1.5px solid #cbd5e1;border-radius:8px">
+                      <div class="muted" style="font-size:.75rem;margin-top:.15rem">표기: <b class="pend-base-prev">${fmtYYMMDD(it.autoBaseDate)}</b>부</div>
+                    </td>
+                    <td>
+                      <input type="date" class="pend-prop" value="${esc(it.autoPropDate)}" style="padding:.35rem .5rem;font-weight:700;border:1.5px solid #2563eb;border-radius:8px">
+                      <div class="muted" style="font-size:.75rem;margin-top:.15rem">표기: <b class="pend-prop-prev">${fmtYYMMDD(it.autoPropDate)}</b> 건의</div>
+                    </td>
+                    <td class="nowrap">
+                      <button type="button" class="btn small primary pend-save-one" style="background:#16a34a">✔ 건의완료 저장</button>
+                    </td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+        ` : ''}
+      </div>
+
       <div class="note">
-        예배 <b>${U}회</b> 달성마다 마일리지(1~5차: 24회·48회·72회·96회·120회) <b>기준일(예배 달성일)</b>과 <b>건의일(부대 건의일)</b>을 기록·관리합니다.<br>
-        날짜는 <code>26.02.01</code> 형식으로 표시되며, <b>[건의 입력/수정]</b>을 눌러 차수별 기준일과 건의일을 언제든 등록·수정할 수 있습니다.
+        예배 <b>${U}회</b> 달성마다 마일리지(1~5차: 24회·48회·72회·96회·120회) <b>기준일(언제부)</b>과 <b>건의일(언제 건의신청)</b>을 기록·관리합니다.<br>
+        날짜는 <code>26.02.01</code> 형식으로 표시되며, 표 우측의 <b>[건의 입력/수정]</b>을 눌러 언제든 모든 차수의 날짜를 수정할 수 있습니다.
       </div>
       <div class="toolbar">
         ${this.unitSelect('mil-unit', true, this.milUnit || '')}
@@ -784,6 +879,81 @@ const Admin = {
         <button class="btn ghost small" id="mil-xl">📊 마일리지 표 엑셀 다운로드</button>
       </div>
       <div id="mil-table-wrap"></div>`;
+
+    // 미건의 대상자 행의 날짜 변경 시 YY.MM.DD 실시간 미리보기 업데이트
+    $$('.pend-item-row', body).forEach(row => {
+      const bIn = $('.pend-base', row);
+      const pIn = $('.pend-prop', row);
+      const bPrev = $('.pend-base-prev', row);
+      const pPrev = $('.pend-prop-prev', row);
+      if (bIn && bPrev) bIn.onchange = () => { bPrev.textContent = fmtYYMMDD(bIn.value) || '-'; };
+      if (pIn && pPrev) pIn.onchange = () => { pPrev.textContent = fmtYYMMDD(pIn.value) || '-'; };
+
+      const saveBtn = $('.pend-save-one', row);
+      if (saveBtn) {
+        saveBtn.onclick = async () => {
+          const mId = row.dataset.mid;
+          const stage = +row.dataset.stage;
+          const baseVal = bIn.value;
+          const propVal = pIn.value;
+          if (!baseVal) return Modal.alert('언제부(기준일) 날짜를 선택해 주세요.');
+          if (!propVal) return Modal.alert('언제 건의신청(건의일) 날짜를 선택해 주세요.');
+
+          const targetRow = allRows.find(x => String(x.m.id) === String(mId));
+          if (!targetRow) return;
+          const updatedSlots = targetRow.slots.map(sl => ({
+            stage: sl.stage,
+            count: sl.count,
+            baseDate: sl.stage === stage ? baseVal : sl.baseDate,
+            proposedDate: sl.stage === stage ? propVal : sl.proposedDate,
+          }));
+          await Store.saveMemberSlots(targetRow.m.id, updatedSlots);
+          this.render();
+        };
+      }
+    });
+
+    // 미건의 전체 일괄 저장 버튼
+    const applyAllBtn = $('#apply-all-pending', body);
+    if (applyAllBtn) {
+      applyAllBtn.onclick = async () => {
+        const rows = $$('.pend-item-row', body);
+        if (!rows.length) return;
+        if (!await Modal.confirm(`화면 상단의 미건의 대상 <b>${rows.length}건</b>을 입력된 기준일(언제부)·건의일로 한꺼번에 건의완료 처리할까요?`, '일괄 건의완료 저장')) return;
+
+        // 용사별로 슬롯 변경사항 모으기
+        const updatesByMember = {};
+        rows.forEach(row => {
+          const mId = row.dataset.mid;
+          const stage = +row.dataset.stage;
+          const baseVal = $('.pend-base', row).value;
+          const propVal = $('.pend-prop', row).value;
+          if (!updatesByMember[mId]) {
+            const tr = allRows.find(x => String(x.m.id) === String(mId));
+            if (tr) {
+              updatesByMember[mId] = tr.slots.map(sl => ({
+                stage: sl.stage,
+                count: sl.count,
+                baseDate: sl.baseDate,
+                proposedDate: sl.proposedDate,
+              }));
+            }
+          }
+          if (updatesByMember[mId]) {
+            const slotObj = updatesByMember[mId].find(s => s.stage === stage);
+            if (slotObj) {
+              slotObj.baseDate = baseVal;
+              slotObj.proposedDate = propVal;
+            }
+          }
+        });
+
+        for (const [mId, slots] of Object.entries(updatesByMember)) {
+          await Store.saveMemberSlots(mId, slots);
+        }
+        this.render();
+      };
+    }
 
     const drawTable = () => {
       this.milUnit = $('#mil-unit').value;
@@ -834,11 +1004,11 @@ const Admin = {
                   <td><b>${r.m.total}회</b></td>
                   <td>${r.pending ? `<span class="badge" style="background:#dc2626;color:#fff">미건의 ${r.pending}건</span>` : (r.granted ? `<span class="badge" style="background:#16a34a;color:#fff">${r.granted}차 완료</span>` : '<span class="muted">-</span>')}</td>
                   ${r.slots.map(sl => {
-                    const isAchievedPending = r.m.total >= sl.count && !sl.proposedDate && !sl.baseDate;
+                    const isAchievedPending = r.m.total >= sl.count && !sl.proposedDate;
                     const dispBase = fmtYYMMDD(sl.baseDate || (isAchievedPending ? sl.achievedDate : ''));
                     const dispProp = fmtYYMMDD(sl.proposedDate);
                     return `
-                      <td class="mil-date-cell ${isAchievedPending ? 'mil-pending-cell' : ''}" title="${sl.stage}차(${sl.count}회) 기준일">${dispBase || ''}</td>
+                      <td class="mil-date-cell ${isAchievedPending ? 'mil-pending-cell' : ''}" title="${sl.stage}차(${sl.count}회) 기준일(언제부)">${dispBase || ''}</td>
                       <td class="mil-date-cell ${isAchievedPending ? 'mil-pending-cell' : ''}" title="${sl.stage}차(${sl.count}회) 건의일">${dispProp || (isAchievedPending ? '<span style="font-size:.75rem;color:#dc2626">미건의</span>' : '')}</td>
                     `;
                   }).join('')}
@@ -850,7 +1020,7 @@ const Admin = {
         </div>`;
 
       $$('[data-grant]', $('#mil-table-wrap')).forEach(b => b.onclick = () => {
-        const r = allRows.find(x => x.m.id === b.dataset.grant);
+        const r = allRows.find(x => String(x.m.id) === String(b.dataset.grant));
         if (r) this.openMileageModal(r);
       });
     };
@@ -866,10 +1036,10 @@ const Admin = {
   openMileageModal(r) {
     const U = CONFIG.mileageUnit;
     const w = Modal.open(`
-      <h3>🎖 ${esc(unitLabel(r.m))} ${esc(r.m.name)} · 마일리지 1~5차 기준일/건의일 등록</h3>
+      <h3>🎖 ${esc(unitLabel(r.m))} ${esc(r.m.name)} · 마일리지 1~5차 (언제부 · 언제 건의신청) 설정</h3>
       <p class="modal-msg small">
         현재 누적 출석: <b>${r.m.total}회</b> (도입 전 ${r.m.baseCount || 0}회 + 사진/시스템 ${r.m.atts.length}회)<br>
-        달성된 회차의 기준일과 부대 건의일을 입력해 주세요. (예: <code>26-2-1</code> 또는 달력 선택 → 표에는 <b>26.02.01</b>로 표시)
+        달성된 회차의 <b>언제부(예배 달성 기준일)</b>는 자동으로 채워지며 수정할 수 있습니다. <b>언제 건의신청(부대 건의일)</b>을 확인 후 저장해 주세요.
       </p>
       <form class="mform" id="gf">
         ${r.slots.map(sl => {
@@ -880,14 +1050,14 @@ const Admin = {
             <div class="slot-grid ${isReached ? 'achieved' : ''}">
               <div>
                 <div class="slot-title">${sl.stage}차 (${sl.count}회)</div>
-                <div style="font-size:.75rem;color:${isReached ? '#b45309' : '#64748b'}">${isReached ? '✔ 달성됨' : '미달성'}</div>
+                <div style="font-size:.75rem;color:${isReached ? '#b45309' : '#64748b'}">${isReached ? (sl.proposedDate ? '✅ 건의완료' : '🚨 달성·미건의') : '미달성'}</div>
               </div>
               <label style="margin:0;font-size:.82rem">
-                ${sl.stage}차 기준일 (예배 기준)
+                📅 언제부 (${sl.stage}차 기준일 · 자동/수정가능)
                 <input type="date" data-s-base="${sl.stage}" value="${autoBase || ''}">
               </label>
               <label style="margin:0;font-size:.82rem">
-                ${sl.stage}차 건의일 (부대 건의)
+                📅 언제 건의신청 (${sl.stage}차 건의일)
                 <input type="date" data-s-prop="${sl.stage}" value="${autoProp || ''}">
               </label>
             </div>

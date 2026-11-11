@@ -1,7 +1,7 @@
 /* 오프라인 캐시 (항상 최신 본을 먼저 시도하고, 안 되면 캐시 사용) */
-const CACHE = 'cheongun-v21';
-const ASSETS = ['./', './index.html', './css/style.css?v=21', './js/config.js?v=21', './js/db.js?v=21', './js/api.js?v=21', './js/store.js?v=21',
-  './js/report.js?v=21', './js/camera.js?v=21', './js/admin.js?v=21', './js/app.js?v=21', './manifest.json', './icon.svg'];
+const CACHE = 'cheongun-v22';
+const ASSETS = ['./', './index.html', './css/style.css?v=22', './js/config.js?v=22', './js/db.js?v=22', './js/api.js?v=22', './js/store.js?v=22',
+  './js/report.js?v=22', './js/camera.js?v=22', './js/admin.js?v=22', './js/app.js?v=22', './manifest.json', './icon.svg'];
 
 self.addEventListener('install', e => {
   e.waitUntil(caches.open(CACHE).then(c => c.addAll(ASSETS)).then(() => self.skipWaiting()));
