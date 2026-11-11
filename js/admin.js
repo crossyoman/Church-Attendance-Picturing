@@ -515,7 +515,7 @@ const Admin = {
     const ms = (await Store.membersWithStats()).sort((a, b) => unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) || koSort(a, b));
     this.selectedMemberIds = this.selectedMemberIds || new Set();
     // 이미 삭제된 ID 정리
-    const validIds = new Set(ms.map(m => m.id));
+    const validIds = new Set(ms.map(m => String(m.id)));
     this.selectedMemberIds.forEach(id => { if (!validIds.has(id)) this.selectedMemberIds.delete(id); });
 
     body.innerHTML = `
@@ -539,7 +539,7 @@ const Admin = {
       this.fUnit = $('#f-unit').value;
       this.fQ = $('#f-q').value.trim();
       const rows = ms.filter(m => (!this.fUnit || `${m.unit}|${m.company || ''}` === this.fUnit) && (!this.fQ || m.name.includes(this.fQ)));
-      const allChecked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(m.id));
+      const allChecked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(String(m.id)));
 
       $('#list').innerHTML = `
         <p class="muted">${rows.length}명 표시 중</p>
@@ -554,15 +554,16 @@ const Admin = {
             <tbody>
               ${rows.map(m => `
                 <tr>
-                  <td style="text-align:center"><input type="checkbox" class="chk-mem" data-id="${m.id}" ${this.selectedMemberIds.has(m.id) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></td>
+                  <td style="text-align:center"><input type="checkbox" class="chk-mem" data-id="${m.id}" ${this.selectedMemberIds.has(String(m.id)) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></td>
                   <td>${esc(unitLabel(m))}</td>
                   <td><b>${esc(m.name)}</b>${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
                   <td>${m.dischargeDate}</td>
                   <td>${m.total}</td>
                   <td>${m.last || '-'}</td>
                   <td class="nowrap">
-                    <button class="btn small ghost" data-hist="${m.id}">기록</button>
-                    <button class="btn small ghost" data-edit="${m.id}">수정</button>
+                    <button type="button" class="btn small ghost" data-hist="${m.id}">기록</button>
+                    <button type="button" class="btn small ghost" data-edit="${m.id}">수정</button>
+                    <button type="button" class="btn small danger" data-del-one="${m.id}">삭제</button>
                   </td>
                 </tr>`).join('')}
             </tbody>
@@ -573,22 +574,30 @@ const Admin = {
       if (chkAll) {
         chkAll.onchange = e => {
           rows.forEach(m => {
-            if (e.target.checked) this.selectedMemberIds.add(m.id);
-            else this.selectedMemberIds.delete(m.id);
+            if (e.target.checked) this.selectedMemberIds.add(String(m.id));
+            else this.selectedMemberIds.delete(String(m.id));
           });
           draw();
         };
       }
       $$('.chk-mem', $('#list')).forEach(cb => {
         cb.onchange = e => {
-          if (e.target.checked) this.selectedMemberIds.add(cb.dataset.id);
-          else this.selectedMemberIds.delete(cb.dataset.id);
-          if (chkAll) chkAll.checked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(m.id));
+          if (e.target.checked) this.selectedMemberIds.add(String(cb.dataset.id));
+          else this.selectedMemberIds.delete(String(cb.dataset.id));
+          if (chkAll) chkAll.checked = rows.length > 0 && rows.every(m => this.selectedMemberIds.has(String(m.id)));
           updateDelBtn();
         };
       });
-      $$('[data-hist]').forEach(b => b.onclick = () => this.history(ms.find(m => m.id === b.dataset.hist)));
-      $$('[data-edit]').forEach(b => b.onclick = () => this.memberForm(ms.find(m => m.id === b.dataset.edit)));
+      $$('[data-hist]').forEach(b => b.onclick = () => this.history(ms.find(m => String(m.id) === String(b.dataset.hist))));
+      $$('[data-edit]').forEach(b => b.onclick = () => this.memberForm(ms.find(m => String(m.id) === String(b.dataset.edit))));
+      $$('[data-del-one]').forEach(b => b.onclick = async () => {
+        const target = ms.find(m => String(m.id) === String(b.dataset.delOne));
+        if (!target) return;
+        if (!await Modal.confirm(`<b>${esc(unitLabel(target))} ${esc(target.name)}</b> 형제의 모든 정보와 출석 기록·사진을 삭제할까요?`, '삭제')) return;
+        await Store.deleteMember(target.id);
+        this.selectedMemberIds.delete(String(target.id));
+        this.render();
+      });
       updateDelBtn();
     };
 
@@ -598,7 +607,7 @@ const Admin = {
     $('#del-sel').onclick = async () => {
       const ids = [...this.selectedMemberIds];
       if (!ids.length) return;
-      const names = ids.map(id => ms.find(x => x.id === id)?.name).filter(Boolean);
+      const names = ids.map(id => ms.find(x => String(x.id) === String(id))?.name).filter(Boolean);
       const previewNames = names.slice(0, 5).join(', ') + (names.length > 5 ? ` 외 ${names.length - 5}명` : '');
       if (!await Modal.confirm(`선택한 <b>${ids.length}명</b>(${esc(previewNames)})의 모든 정보와 출석 기록·사진을 일괄 삭제할까요?<br><span class="red">삭제된 데이터는 복구할 수 없습니다.</span>`, '일괄 삭제')) return;
       await Store.deleteMembersBatch(ids);
@@ -1153,15 +1162,7 @@ const Admin = {
           <button class="btn primary" ${apiUrl ? '' : 'disabled'}>백엔드 비밀번호 변경</button>
         </form>
       </div>
-      <div class="card"><h3>📱 예배당 출석 단말기(공기계) 승인</h3>
-        <p class="hint">외부 용사들이 사이트 주소를 알아내 자기 스마트폰에서 부정 출석하는 것을 막기 위해, <b>목사님이 승인한 예배당 공기계에서만 출석체크가 가능</b>합니다.</p>
-        <div style="margin-top:.8rem;padding:.8rem;border-radius:10px;background:#f8fafc;border:1px solid #e2e8f0;font-size:1rem;font-weight:700">
-          단말기 상태: <span id="kiosk-status">${s.isKioskAuthorized ? '🟢 예배당 공식 출석 단말기로 승인됨 (출석 가능)' : '🔴 미승인 기기 (외부 접속 차단 상태: 출석 불가)'}</span>
-        </div>
-        <div class="row" style="margin-top:.8rem">
-          <button class="btn primary" id="kiosk-auth-btn">${s.isKioskAuthorized ? '🚫 단말기 승인 해제 (개인 조회 전용 모드로 변경)' : '📱 이 기기를 예배당 출석 단말기로 승인하기'}</button>
-        </div>
-      </div>
+
       <div class="card"><h3>📧 이메일</h3>
         <form class="mform" id="ef">
           <label>리포트 받는 이메일 <input type="email" id="ef-a" value="${esc(s.adminEmail)}" required></label>

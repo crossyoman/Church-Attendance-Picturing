@@ -241,15 +241,24 @@ const Backend = {
     this.syncing = true;
     try {
       await this.flush();
-      const pending = (await DB.all('syncQueue')).filter(i => !i.needsAuth).length;
-      if (pending > 0 && !force) return false; // 아직 업로드 못한 로컬 작업이 있으면 덮어쓰기 방지
+      const allQueue = await DB.all('syncQueue');
+      if (allQueue.length > 0 && !force) return false; // 아직 업로드 못한 로컬 작업(삭제 포함)이 있으면 덮어쓰기 방지
+
+      // 큐에 대기 중인 삭제 작업 목록(설령 force 동기화라도 로컬에서 삭제한 항목이 다시 살아나지 않도록 보호)
+      const pendingDeletedMemberIds = new Set(
+        allQueue.filter(i => i.action === 'deleteMember' && i.payload && i.payload.id).map(i => String(i.payload.id))
+      );
+      const pendingDeletedAttIds = new Set(
+        allQueue.filter(i => (i.action === 'deleteAttendance' || i.action === 'cancelAttendance') && i.payload && (i.payload.id || i.payload.attId))
+          .map(i => String(i.payload.id || i.payload.attId))
+      );
 
       const s = await DB.get('settings', 'main') || {};
       const chk = await this.call('checkSync', {});
       const localMembers = await DB.all('members');
 
-      if (!force && localMembers.length > 0 && s.lastSyncRev && Number(s.lastSyncRev) === Number(chk.syncRev)) {
-        return false; // 변경 없음
+      if (!force && s.lastSyncRev && Number(s.lastSyncRev) === Number(chk.syncRev)) {
+        return false; // 변경 없음 (로컬에서 전체 삭제해 0명이 된 경우에도 서버로 덮어쓰지 않음)
       }
 
       const res = await this.call('pullAll', { includePhotos: false });
@@ -270,9 +279,17 @@ const Backend = {
       });
       await DB.put('settings', mergedSettings, 'main');
 
-      for (const m of data.members || []) await DB.put('members', m);
-      for (const a of data.attendance || []) await DB.put('attendance', a);
-      for (const g of data.mileage || []) await DB.put('mileage', g);
+      for (const m of data.members || []) {
+        if (!pendingDeletedMemberIds.has(String(m.id))) await DB.put('members', m);
+      }
+      for (const a of data.attendance || []) {
+        if (!pendingDeletedMemberIds.has(String(a.memberId)) && !pendingDeletedAttIds.has(String(a.id))) {
+          await DB.put('attendance', a);
+        }
+      }
+      for (const g of data.mileage || []) {
+        if (!pendingDeletedMemberIds.has(String(g.memberId))) await DB.put('mileage', g);
+      }
       for (const d of data.discharged || []) await DB.put('discharged', d);
       for (const w of data.warnings || []) await DB.put('warnings', w);
       return true;

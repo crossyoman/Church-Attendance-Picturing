@@ -246,22 +246,39 @@ const Store = {
     return m;
   },
 
-  async deleteMember(id, skipAuth = false) {
-    if (!skipAuth) await this.needBackendAuth();
-    const atts = await DB.byIndex('attendance', 'memberId', id);
-    for (const a of atts) { await DB.del('attendance', a.id); await DB.del('photos', a.id); }
-    for (const g of await DB.byIndex('mileage', 'memberId', id)) await DB.del('mileage', g.id);
+  async deleteMember(id) {
+    // 목사님 전용 화면(PIN 통과) 안에서는 추가 비밀번호 팝업 없이 즉시 로컬 DB에서 삭제하고 백엔드 동기화 큐에 등록
+    const targetId = String(id);
+    const allAtts = await DB.all('attendance');
+    for (const a of allAtts) {
+      if (String(a.memberId) === targetId) {
+        await DB.del('attendance', a.id);
+        await DB.del('photos', a.id);
+      }
+    }
+    const allGrants = await DB.all('mileage');
+    for (const g of allGrants) {
+      if (String(g.memberId) === targetId) {
+        await DB.del('mileage', g.id);
+      }
+    }
     await DB.del('members', id);
+    if (typeof id === 'string' && /^\d+$/.test(id)) {
+      try { await DB.del('members', Number(id)); } catch (e) {}
+    }
     if (typeof Backend !== 'undefined') {
+      if (!Backend.sessionBackendPw) {
+        const s = await this.settings();
+        Backend.sessionBackendPw = s.password || CONFIG.defaultPassword || '0113';
+      }
       await Backend.enqueue('deleteMember', { id });
     }
   },
 
   async deleteMembersBatch(ids) {
     if (!ids || !ids.length) return;
-    await this.needBackendAuth();
     for (const id of ids) {
-      await this.deleteMember(id, true);
+      await this.deleteMember(id);
     }
   },
 
@@ -339,10 +356,13 @@ const Store = {
   },
 
   async deleteAttendance(id, syncServer = true) {
-    if (syncServer) await this.needBackendAuth();
     await DB.del('attendance', id);
     await DB.del('photos', id);
     if (syncServer && typeof Backend !== 'undefined') {
+      if (!Backend.sessionBackendPw) {
+        const s = await this.settings();
+        Backend.sessionBackendPw = s.password || CONFIG.defaultPassword || '0113';
+      }
       await Backend.enqueue('deleteAttendance', { id });
     }
   },

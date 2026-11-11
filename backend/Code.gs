@@ -78,7 +78,9 @@ function setAdminPin(pin) {
 }
 
 function verifyBackendPassword(inputPw) {
-  return String(inputPw || '').trim() === String(getBackendPassword()).trim();
+  const inp = String(inputPw || '').trim();
+  if (!inp) return false;
+  return inp === String(getBackendPassword()).trim() || inp === String(getAdminPin()).trim();
 }
 
 function requireBackendAuth(authPw) {
@@ -167,8 +169,6 @@ function handleAction(action, p, authPw) {
     'setupTrigger',
     'saveSettings',
     'changeBackendPassword',
-    'deleteMember',
-    'deleteAttendance',
     'sendWeeklyReport',
     'sendWarningEmail',
     'pushAll',
@@ -578,11 +578,12 @@ function cancelAttendanceOnServer(attId, removeNewMember, memberId) {
 }
 
 function deleteMemberOnServer(memberId) {
-  const atts = readAllObjects('attendance').filter(a => a.memberId === memberId);
+  const target = String(memberId);
+  const atts = readAllObjects('attendance').filter(a => String(a.memberId) === target);
   atts.forEach(a => deleteAttendanceOnServer(a.id));
-  const grants = readAllObjects('mileage').filter(g => g.memberId === memberId);
+  const grants = readAllObjects('mileage').filter(g => String(g.memberId) === target);
   grants.forEach(g => deleteRowById('mileage', g.id));
-  deleteRowById('members', memberId);
+  deleteRowById('members', target);
 }
 
 function processDischargesOnServer(todayStrOverride) {

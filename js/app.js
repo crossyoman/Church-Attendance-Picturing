@@ -273,7 +273,7 @@ const App = {
     };
   },
 
-  /* ---------- 6. 사진 촬영 ----------
+  /* ---------- 6. 사진 촬영 (카운트다운 없이 버튼 터치 즉시 찰칵) ----------
    * ctx.member  : 기존 형제 / ctx.pending : 오늘 처음 온 형제(촬영 후 등록)
    * ctx.retake  : { att, member, isNew } 다시 찍기(같은 출석 기록의 사진 교체)
    */
@@ -295,19 +295,27 @@ const App = {
     const video = $('#video'), actions = $('#actions');
 
     const shoot = async () => {
-      $('#shoot').disabled = true;
+      const shootBtn = $('#shoot');
+      if (shootBtn) shootBtn.disabled = true;
       Sound.unlock();
+
+      // 카운트다운 설정이 0보다 클 때만 카운트, 기본(0)은 누르는 즉시 찰칵!
+      const waitSec = Number(CONFIG.countdownSeconds) || 0;
       const cd = $('#cd');
-      for (let n = CONFIG.countdownSeconds || 2; n > 0; n--) {
-        if (this.state.screen !== 'camera') return;
-        cd.textContent = n; cd.classList.remove('pop'); void cd.offsetWidth; cd.classList.add('pop');
-        Sound.beep(n === 1 ? 1100 : 880);
-        await sleep(800);
+      if (waitSec > 0 && cd) {
+        for (let n = waitSec; n > 0; n--) {
+          if (this.state.screen !== 'camera') return;
+          cd.textContent = n; cd.classList.remove('pop'); void cd.offsetWidth; cd.classList.add('pop');
+          Sound.beep(n === 1 ? 1100 : 880);
+          await sleep(800);
+        }
+        cd.textContent = '';
       }
       if (this.state.screen !== 'camera') return;
-      cd.textContent = '';
+
       Sound.shutter();
-      const fl = $('#flash'); fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go');
+      const fl = $('#flash');
+      if (fl) { fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go'); }
 
       const shotAt = new Date();
       // 워터마크: 이름표를 가리지 않도록 전역일은 빼고 우측에 배치
@@ -425,6 +433,10 @@ const App = {
         if (code.length === 4) {
           if (code === targetPw) {
             locked = true;
+            // 목사님 전용 진입 시 입력한 PIN을 백엔드 세션 비밀번호로도 자동 기억하여 삭제/수정 시 이중 비밀번호 창이 뜨지 않게 함
+            if (typeof Backend !== 'undefined' && !Backend.sessionBackendPw) {
+              Backend.sessionBackendPw = code;
+            }
             Modal.close(w);
             Admin.open();
           } else {
