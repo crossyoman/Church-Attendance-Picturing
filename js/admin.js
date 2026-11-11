@@ -121,16 +121,17 @@ const Admin = {
           ※ ‘기준’에서 <b>지금 시점</b>이나 <b>최근 주일</b>을 순서대로 고르시거나, 우측 달력에서 <b>몇 월 며칠부터 몇 월 며칠까지</b>를 직접 선택하실 수 있습니다. (종료일 선택 시 기본 1주일로 자동 세팅)
         </p>
       </div>
-      <div class="toolbar">
-        <button class="btn primary" id="share-all" style="font-weight:700">📧 기기 메일 앱으로 보내기 (출석엑셀 + 24회 달성자 사진)</button>
-        <button class="btn ghost small" id="dl-week-xl">📊 출석·통계 엑셀(.xlsx) 다운로드</button>
+      <div class="toolbar" style="gap:.5rem">
+        <button class="btn primary" id="share-excel" style="font-weight:700">📧 1) 출석·통계 엑셀 메일 보내기</button>
+        <button class="btn primary" id="share-ach-photos" style="font-weight:700;background:#1e3a8a">📸 2) 24회 달성자 사진 메일 보내기</button>
+        <button class="btn ghost small" id="dl-week-xl">📊 엑셀(.xlsx) 다운로드</button>
         <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
-        💡 <b>리포트 메일 발송 안내</b>: 위의 <b>‘📧 기기 메일 앱으로 보내기’</b>를 누르시면<br>
-        ① <b>어느 부대 누가 출석했는지 + 날짜별 부대 통계 + 마일리지 현황이 담긴 엑셀 파일</b><br>
-        ② <b>24회 마일리지 달성자의 최근 24회분 인증 사진</b>이 첨부되어 발송됩니다.<br>
-        <span class="muted">(그날 예배 참석자들의 전체 사진 확인은 상단 <b>‘📸 오늘의 출석자’</b> 탭에서 한눈에 보실 수 있습니다.)</span>
+        💡 <b>리포트 메일 발송 안내 (안드로이드 Gmail 첨부 호환)</b>:<br>
+        스마트폰(안드로이드)에서 엑셀 파일과 사진(JPG)을 한 번에 섞어 보내면 Gmail 앱이 제목·본문·첨부를 빈칸으로 비워버리는 현상이 있어, <b>100% 누락 없이 첨부되도록 버튼 2개로 분리</b>했습니다.<br>
+        ① <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b>: 메일 제목·본문 + <b>주간 출석명단·부대통계·마일리지 엑셀 파일</b>이 Gmail에 즉시 세팅됩니다.<br>
+        ② <b>‘📸 2) 24회 달성자 사진 메일 보내기’</b>: 24회 달성자가 있는 주간에 누르시면 <b>달성자의 최근 24회 인증 사진들</b>이 Gmail에 즉시 첨부됩니다. (각 달성자 카드 안의 개별 발송 버튼을 쓰셔도 됩니다)
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
 
@@ -227,7 +228,7 @@ const Admin = {
             <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
           <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
-            <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송</button>
+            <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송 (최근 24회 사진)</button>
             <button class="btn small ghost" data-dl="${i}">💾 이 형제 24회 사진(${a.block.filter(b => b.hasPhoto).length}장) 저장</button>
           </div>
         </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 새로 달성한 형제가 없습니다.</p>'}
@@ -238,42 +239,58 @@ const Admin = {
       await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
     }
 
-    $$('[data-share]').forEach(b => b.onclick = async () => {
-      const a = r.achievers[+b.dataset.share];
+    // 마일리지 달성자별 사진 미리 로드 (클릭 즉시 공유창이 뜨도록 사용자 제스처 보존)
+    const achieverPhotoListByIdx = await Promise.all(
+      r.achievers.map(a => photoFiles(a.block || []))
+    );
+    const allAchieverPhotos = achieverPhotoListByIdx.flat();
+
+    $$('[data-share]').forEach(b => b.onclick = () => {
+      const idx = +b.dataset.share;
+      const a = r.achievers[idx];
       const one = { ...r, achievers: [a] };
-      await shareReport(`${title} - ${a.person.name}`, Report.text(one), await photoFiles(a.block));
+      const pFiles = achieverPhotoListByIdx[idx] || [];
+      shareReport(`${title} - ${a.person.name}(${a.milestone}회 달성)`, Report.text(one), pFiles, pFiles);
     });
-    $$('[data-dl]').forEach(b => b.onclick = async () => downloadFiles(await photoFiles(r.achievers[+b.dataset.dl].block)));
+    $$('[data-dl]').forEach(b => b.onclick = () => downloadFiles(achieverPhotoListByIdx[+b.dataset.dl] || []));
 
-    $('#dl-week-xl').onclick = async () => {
-      const xlFile = await Report.buildWeeklyExcelFile(r);
-      if (!xlFile) return Modal.alert('엑셀 생성 도구를 불러오지 못했습니다.');
-      downloadBlob(xlFile, xlFile.name);
-    };
-
-    // 메일 발송 시 사진은 마일리지 달성자의 최근 24회 인증 사진만 첨부 + 출석·통계 엑셀 파일 함께 첨부
-    const achieverAtts = [];
-    for (const a of r.achievers) achieverAtts.push(...(a.block || []));
     const csvExcelFile = Report.buildWeeklyCsvFile(r);
     const xlFileReady = await Report.buildWeeklyExcelFile(r);
-    const achieverPhotoFiles = await photoFiles(achieverAtts);
 
-    // 기기 브라우저가 .xlsx 공유를 허용하면 .xlsx + 달성자 24회 사진, 안드로이드 크롬처럼 .xlsx를 막으면 엑셀 호환 .csv + 달성자 24회 사진으로 자동 구성
-    let shareFiles = [csvExcelFile, ...achieverPhotoFiles].filter(Boolean);
+    $('#dl-week-xl').onclick = () => {
+      if (!xlFileReady) return Modal.alert('엑셀 생성 도구를 불러오지 못했습니다.');
+      downloadBlob(xlFileReady, xlFileReady.name);
+    };
+
+    // 1) 출석·통계 엑셀 파일 단독 공유 (동일 타입 단일 파일이므로 Gmail에서 제목·본문·첨부가 100% 정상 세팅됨)
+    let excelShareTarget = [csvExcelFile].filter(Boolean);
     if (xlFileReady && typeof navigator.canShare === 'function') {
       try {
-        if (navigator.canShare({ files: [xlFileReady, ...achieverPhotoFiles] })) {
-          shareFiles = [xlFileReady, ...achieverPhotoFiles];
-        } else if (navigator.canShare({ files: [csvExcelFile, ...achieverPhotoFiles] })) {
-          shareFiles = [csvExcelFile, ...achieverPhotoFiles];
+        if (navigator.canShare({ files: [xlFileReady] })) {
+          excelShareTarget = [xlFileReady];
         }
       } catch (e) {}
     }
 
-    $('#share-all').onclick = () => {
-      // 클릭 이벤트 안에서 await 없이 즉시 shareReport를 호출해야 안드로이드 크롬이 사용자 터치로 인정하여 Gmail 공유창을 띄움
-      shareReport(title, text, shareFiles, xlFileReady ? [xlFileReady, ...achieverPhotoFiles] : [csvExcelFile, ...achieverPhotoFiles]);
+    const shareAchBtn = $('#share-ach-photos');
+    if (shareAchBtn) {
+      shareAchBtn.textContent = `📸 2) 24회 달성자 사진 메일 보내기 (${allAchieverPhotos.length}장)`;
+    }
+
+    $('#share-excel').onclick = () => {
+      shareReport(title, text, excelShareTarget, xlFileReady ? [xlFileReady] : [csvExcelFile]);
     };
+
+    $('#share-ach-photos').onclick = () => {
+      if (!r.achievers.length) {
+        return Modal.alert('선택한 기간에 24회 마일리지를 새로 달성한 형제가 없습니다.<br>(출석 명단과 통계는 <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b> 버튼을 눌러 보내실 수 있습니다.)');
+      }
+      if (!allAchieverPhotos.length) {
+        return Modal.alert('달성자의 사진 인증 기록이 없습니다.');
+      }
+      shareReport(`${title} - 24회 달성자 인증사진(${allAchieverPhotos.length}장)`, text, allAchieverPhotos, allAchieverPhotos);
+    };
+
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
 

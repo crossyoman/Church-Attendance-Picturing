@@ -179,11 +179,27 @@ async function downloadFiles(files) {
   }
 }
 
-/** 기기 공유창(Gmail 앱 등)으로 본문 + 사진/표 일괄 첨부 (데스크탑에서는 Gmail 웹 작성창 오픈 + 파일 다운로드) */
+/**
+ * 기기 공유창(안드로이드 Gmail 앱 등) 또는 데스크탑 Gmail 웹으로 메일 발송
+ * - 안드로이드 OS 주의사항:
+ *   1) 파일명에 공백이나 괄호가 있으면 안드로이드 WebShare 임시 파일 URI 생성 시 깨져서 Gmail에 빈 메일로 열리는 버그가 있으므로 파일명을 안전한 문자(언더바)로 정규화.
+ *   2) 서로 다른 MIME 타입(예: text/csv + image/jpeg)을 한 번에 보내면 안드로이드가 `*/*` 인텐트로 변환하면서 Gmail 앱이 제목·본문·첨부파일을 통째로 누락시키는 현상이 발생함.
+ */
 async function shareReport(title, text, files = [], extraDownloadFiles = []) {
-  const validFiles = (files || []).filter(Boolean);
-  if (typeof navigator.share === 'function') {
+  const validFiles = (files || []).filter(Boolean).map(f => {
+    const cleanName = String(f.name || 'attachment')
+      .replace(/\s+/g, '_')
+      .replace(/[()[\]{}:*?"<>|\\/,;']/g, '_');
+    return cleanName === f.name ? f : new File([f], cleanName, { type: f.type });
+  });
+
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+
+  if (isMobile && typeof navigator.share === 'function') {
     try {
+      // 클립보드에도 본문을 미리 복사해 두어 만일의 경우 바로 붙여넣기 가능하게 보장
+      try { await navigator.clipboard.writeText(text); } catch (e) {}
+
       if (validFiles.length && (!navigator.canShare || navigator.canShare({ files: validFiles }))) {
         await navigator.share({ title, text, files: validFiles });
         return true;
@@ -197,9 +213,13 @@ async function shareReport(title, text, files = [], extraDownloadFiles = []) {
     }
   }
 
-  // 공유창이 없는 데스크탑 PC 브라우저: 본문 복사 + 엑셀/사진 자동 다운로드 + Gmail 웹 작성창 오픈 안내
+  // 데스크탑 PC 브라우저이거나 모바일 공유가 지원되지 않는 경우:
+  // 본문 복사 + 파일 자동 다운로드 + Gmail 웹 작성창(또는 기본 메일앱) 오픈
   try { await navigator.clipboard.writeText(text); } catch (e) {}
-  const dlList = [...(extraDownloadFiles || []).filter(Boolean), ...validFiles];
+  const dlList = (extraDownloadFiles && extraDownloadFiles.length)
+    ? extraDownloadFiles.filter(Boolean)
+    : validFiles;
+
   let adminEmail = (typeof CONFIG !== 'undefined' && CONFIG.defaultAdminEmail) ? CONFIG.defaultAdminEmail : 'crossyoman@gmail.com';
   try {
     if (typeof Store !== 'undefined' && Store.settings) {
@@ -209,10 +229,10 @@ async function shareReport(title, text, files = [], extraDownloadFiles = []) {
   } catch (e) {}
 
   const openGmail = await Modal.confirm(
-    `데스크탑 PC 브라우저에서는 모바일 앱 공유창을 열 수 없어 <b>출석 엑셀 및 사진 파일(${dlList.length}개)을 자동 다운로드</b>하고 <b>본문을 클립보드에 복사</b>합니다.<br><br>` +
-    `지금 바로 <b>Gmail 메일 쓰기 창</b>을 새 탭으로 열까요?<br>` +
-    `<span class="muted">(수신자·제목·본문이 자동 입력되며, 다운로드된 파일만 마우스로 끌어다 놓으시면 됩니다. 공기계 스마트폰에서 누르시면 Gmail 앱으로 파일까지 즉시 첨부됩니다.)</span>`,
-    '📧 Gmail 웹 창 열기 + 파일 다운로드',
+    `<b>출석 엑셀 및 달성자 사진 파일(${dlList.length}개)을 자동 다운로드</b>하고 <b>메일 본문을 클립보드에 복사</b>합니다.<br><br>` +
+    `지금 바로 <b>Gmail 메일 쓰기 창</b>을 열까요?<br>` +
+    `<span class="muted">(수신자·제목·본문이 자동으로 채워진 상태로 열리며, 방금 다운로드된 엑셀/사진 파일만 첨부하시면 됩니다.)</span>`,
+    '📧 Gmail 메일창 열기 + 파일 다운로드',
     '💾 파일만 다운로드'
   );
 
