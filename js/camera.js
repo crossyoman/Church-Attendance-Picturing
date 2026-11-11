@@ -181,9 +181,8 @@ async function downloadFiles(files) {
 
 /**
  * 기기 공유창(안드로이드 Gmail 앱 등) 또는 데스크탑 Gmail 웹으로 메일 발송
- * - 안드로이드 OS 주의사항:
- *   1) 파일명에 공백이나 괄호가 있으면 안드로이드 WebShare 임시 파일 URI 생성 시 깨져서 Gmail에 빈 메일로 열리는 버그가 있으므로 파일명을 안전한 문자(언더바)로 정규화.
- *   2) 서로 다른 MIME 타입(예: text/csv + image/jpeg)을 한 번에 보내면 안드로이드가 `*/*` 인텐트로 변환하면서 Gmail 앱이 제목·본문·첨부파일을 통째로 누락시키는 현상이 발생함.
+ * - 파일명에 공백이나 특수문자가 있으면 안드로이드 WebShare 임시 파일 URI 생성 시 깨져서
+ *   Gmail에 빈 메일로 열리는 버그가 있으므로 파일명을 안전한 문자(언더바)로 정규화.
  */
 async function shareReport(title, text, files = [], extraDownloadFiles = []) {
   const validFiles = (files || []).filter(Boolean).map(f => {
