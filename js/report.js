@@ -56,8 +56,9 @@ const Report = {
       for (let k = k0 + 1; k <= k1; k++) {
         const lo = U * (k - 1), hi = U * k;
         const block = atts.filter((a, i) => { const ord = base + i + 1; return ord > lo && ord <= hi; });
+        const blockDates = Store.timeline(p, atts).slice(lo, hi);   // 이번 24회 구간(예: 25~48회)의 예배 날짜
         achievers.push({
-          person: p, milestone: hi, total: c1, block,
+          person: p, milestone: hi, total: c1, block, blockDates,
           missing: U - block.length,
           allDates: atts.map(a => a.date),
           grantedBlocks, earnedBlocks: k1, pendingBlocks: Math.max(0, k1 - grantedBlocks),
@@ -117,7 +118,24 @@ const Report = {
 
     const warnings = (await Store.warnings()).filter(w => w.createdAt > start && w.createdAt <= end);
 
+    // 전역일이 이 기간에 도래한 인원 / 다음 7일 내 전역 예정자
+    const endStr = endDateStr || fmtDate(cutoff);
+    const startStr = startDateStr || fmtDate(prev);
+    const inclusiveStart = !!(startDateStr && endDateStr);
+    const nextEnd = new Date(cutoff.getFullYear(), cutoff.getMonth(), cutoff.getDate() + 7);
+    const nextEndStr = fmtDate(nextEnd);
+    const mkDis = p => ({ person: p, label: unitLabel(p), name: p.name, dischargeDate: p.dischargeDate, total: p.total, discharged: !!p.discharged });
+    const sortDis = (a, b) => a.dischargeDate.localeCompare(b.dischargeDate) || unitOrder(a.label) - unitOrder(b.label) || a.name.localeCompare(b.name, 'ko');
+    const dischargees = people
+      .filter(p => p.dischargeDate && (inclusiveStart ? p.dischargeDate >= startStr : p.dischargeDate > startStr) && p.dischargeDate <= endStr)
+      .map(mkDis).sort(sortDis);
+    const upcomingDischarge = people
+      .filter(p => p.dischargeDate && p.dischargeDate > endStr && p.dischargeDate <= nextEndStr)
+      .map(mkDis).sort(sortDis);
+
     return {
+      dischargees,
+      upcomingDischarge,
       cutoff,
       prev,
       startDateStr: startDateStr || fmtDate(prev),
@@ -130,6 +148,28 @@ const Report = {
       stats: { dates, rows, totals },
       warnings,
     };
+  },
+
+  /** 날짜 목록을 10개씩 줄로 나눠 '월-일' 문자열 배열로 */
+  dateGridRows(entries, per = 10) {
+    const rows = [];
+    for (let i = 0; i < entries.length; i += per) rows.push(entries.slice(i, i + per).map(e => fmtMD(e.date)));
+    return rows;
+  },
+
+  /** 전역자 메일 본문 줄 */
+  dischargeLines(r) {
+    const L = [];
+    const dis = r.dischargees || [], nxt = r.upcomingDischarge || [];
+    L.push(`■ 전역자 (이 기간 전역일 도래 ${dis.length}명)`);
+    if (!dis.length) L.push('  - 이 기간 전역일이 도래한 인원이 없습니다.');
+    dis.forEach((d, i) => L.push(`  ${i + 1}) [${d.label}] ${d.name} - 전역일 ${fmtYYMMDD(d.dischargeDate)} (누적 ${d.total}회)`));
+    if (nxt.length) {
+      L.push(`  ▶ 다음 7일 내 전역 예정 (${nxt.length}명)`);
+      nxt.forEach(d => L.push(`    · [${d.label}] ${d.name} - 전역일 ${fmtYYMMDD(d.dischargeDate)} (누적 ${d.total}회)`));
+    }
+    L.push('');
+    return L;
   },
 
   /** [경고-확인필요] 메일 본문 */
@@ -174,6 +214,8 @@ const Report = {
     }
     L.push('');
 
+    this.dischargeLines(r).forEach(x => L.push(x));
+
     L.push(`■ ${CONFIG.mileageUnit}회 마일리지 달성자 (${r.achievers.length}명)`);
     if (!r.achievers.length) {
       L.push('  - 이 기간 신규 마일리지 달성자가 없습니다.');
@@ -207,6 +249,14 @@ const Report = {
         L.push(`     - 사진 인증 일자: ${photoAtts.map(b => b.date).join(', ')}`);
       }
       L.push(`   · 이번 24회 구간: ${a.block.length ? (a.block[0].date + ' ~ ' + a.block[a.block.length - 1].date) : '도입 전 수기 출석'}`);
+      if (a.blockDates && a.blockDates.length) {
+        const st = a.milestone - CONFIG.mileageUnit + 1;
+        L.push(`   · ${st}~${a.milestone}회 예배 날짜 (월-일, 00-00 = 날짜 모름):`);
+        this.dateGridRows(a.blockDates).forEach((row, ri) => {
+          const f = st + ri * 10;
+          L.push(`     ${String(f).padStart(3, ' ')}~${String(f + row.length - 1).padStart(3, ' ')}회 | ${row.join('  ')}`);
+        });
+      }
       L.push(`--------------------------------------------------`);
       L.push('');
     });
@@ -328,6 +378,13 @@ const Report = {
         a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
       ]));
     });
+    lines.push('');
+
+    // 2-2. 전역자
+    lines.push(rowToCsv(['[전역자 (이 기간 전역일 도래) / 다음 7일 내 전역 예정]']));
+    lines.push(rowToCsv(['구분', '소속부대', '이름', '전역일', '누적출석']));
+    (r.dischargees || []).forEach(d => lines.push(rowToCsv(['전역', d.label, d.name, fmtYYMMDD(d.dischargeDate), d.total])));
+    (r.upcomingDischarge || []).forEach(d => lines.push(rowToCsv(['전역예정', d.label, d.name, fmtYYMMDD(d.dischargeDate), d.total])));
     lines.push('');
 
     // 3. 24회 마일리지 달성자
@@ -455,6 +512,24 @@ const Report = {
       XLSX.utils.json_to_sheet(achRows.length ? achRows : [{ 안내: '선택한 기간에 24회 마일리지 신규 달성자가 없습니다.' }]),
       '24회_마일리지_달성자'
     );
+
+    // 3-2. 전역자 시트
+    const disRows = [
+      ...(r.dischargees || []).map(d => ({ 구분: '전역(기간 내 도래)', 소속부대: d.label, 이름: d.name, 전역일: fmtYYMMDD(d.dischargeDate), 누적출석: d.total })),
+      ...(r.upcomingDischarge || []).map(d => ({ 구분: '전역예정(다음 7일)', 소속부대: d.label, 이름: d.name, 전역일: fmtYYMMDD(d.dischargeDate), 누적출석: d.total })),
+    ];
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(disRows.length ? disRows : [{ 안내: '이 기간 전역일이 도래한 인원이 없습니다.' }]), '전역자');
+
+    // 3-3. 마일리지 달성 구간 예배일 (10개씩)
+    const gridAoa = [];
+    (r.achievers || []).forEach(a => {
+      if (!a.blockDates || !a.blockDates.length) return;
+      const st = a.milestone - CONFIG.mileageUnit + 1;
+      gridAoa.push([`${unitLabel(a.person)} ${a.person.name} - ${st}~${a.milestone}회 예배 날짜 (월-일)`]);
+      this.dateGridRows(a.blockDates).forEach((row, ri) => gridAoa.push([`${st + ri * 10}~${st + ri * 10 + row.length - 1}회`, ...row]));
+      gridAoa.push([]);
+    });
+    if (gridAoa.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(gridAoa), '달성구간_예배일');
 
     // 4. 전체_마일리지_현황 (1~5차 기준일·건의일 2행 헤더)
     const people = r.people || await Store.allPeopleFull();

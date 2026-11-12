@@ -262,14 +262,78 @@ const Admin = {
         </div>
       ` : '<p class="muted">이 기간에 출석한 인원이 없습니다.</p>'}
 
+      <h3>🗂 이 기간 전역일 도래자 (${(r.dischargees || []).length}명) 및 7일 내 전역예정 (${(r.upcomingDischarge || []).length}명)</h3>
+      ${((r.dischargees || []).length || (r.upcomingDischarge || []).length) ? `
+        <div class="card" style="border:1.5px solid #94a3b8;background:#f8fafc;margin-bottom:1rem">
+          ${(r.dischargees || []).length ? `
+            <div style="font-weight:700;color:#0f172a;margin-bottom:.4rem">■ 기간 내 전역자 (${r.dischargees.length}명)</div>
+            <div class="tbl-wrap" style="max-height:200px;overflow-y:auto;background:#fff;margin-bottom:.6rem">
+              <table class="tbl">
+                <thead><tr><th>연번</th><th>소속부대</th><th>이름</th><th>전역일</th><th>최종누적출석</th></tr></thead>
+                <tbody>
+                  ${r.dischargees.map((d, idx) => `
+                    <tr>
+                      <td>${idx + 1}</td>
+                      <td>${esc(d.label)}</td>
+                      <td><b>${esc(d.name)}</b> <span class="badge gray">전역</span></td>
+                      <td>${fmtYYMMDD(d.dischargeDate)}</td>
+                      <td><b>${d.total}회</b></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : '<p class="muted" style="margin:0 0 .5rem">이 기간 전역일이 도래한 인원이 없습니다.</p>'}
+          ${(r.upcomingDischarge || []).length ? `
+            <div style="font-weight:700;color:#1e3a8a;margin-bottom:.4rem">▶ 다음 7일 내 전역 예정자 (${r.upcomingDischarge.length}명)</div>
+            <div class="tbl-wrap" style="max-height:160px;overflow-y:auto;background:#fff">
+              <table class="tbl">
+                <thead><tr><th>연번</th><th>소속부대</th><th>이름</th><th>전역일</th><th>현재누적출석</th></tr></thead>
+                <tbody>
+                  ${r.upcomingDischarge.map((d, idx) => `
+                    <tr>
+                      <td>${idx + 1}</td>
+                      <td>${esc(d.label)}</td>
+                      <td><b>${esc(d.name)}</b></td>
+                      <td>${fmtYYMMDD(d.dischargeDate)}</td>
+                      <td><b>${d.total}회</b></td>
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : ''}
+        </div>
+      ` : '<p class="muted">이 기간 전역자 및 7일 내 전역 예정자가 없습니다.</p>'}
+
       <h3>🎖 ${CONFIG.mileageUnit}회 단위 마일리지 달성자 (${r.achievers.length}건)</h3>
       ${r.achievers.length ? r.achievers.map((a, i) => `
         <div class="card ach">
           <div class="ach-head"><b>${esc(unitLabel(a.person))} ${esc(a.person.name)}</b>
             <span class="badge">${a.milestone}회째 달성</span>${a.person.discharged ? '<span class="badge gray">전역</span>' : ''}</div>
           <div class="ach-meta">현재 누적 ${a.total}회 · 지급 완료 ${a.grantedBlocks}회 · 지급 대상 ${a.earnedBlocks}회 ·
-            <b class="${a.pendingBlocks ? 'red' : ''}">미지급 ${a.pendingBlocks}회</b> · 전역 ${a.person.dischargeDate}
+            <b class="${a.pendingBlocks ? 'red' : ''}">미지급 ${a.pendingBlocks}회</b> · 전역 ${fmtYYMMDD(a.person.dischargeDate)}
             ${a.missing ? `<br>※ 사진촬영 전 수기 출석 ${a.missing}회 포함` : ''}</div>
+          ${a.blockDates && a.blockDates.length ? `
+            <div style="margin:.6rem 0;background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.6rem .8rem">
+              <div style="font-weight:700;color:var(--navy);font-size:.85rem;margin-bottom:.35rem">
+                📅 이번 회기(${a.milestone - CONFIG.mileageUnit + 1}~${a.milestone}회) 출석 날짜 (월-일 표):
+              </div>
+              <table style="width:100%;font-size:.8rem;border-collapse:collapse;text-align:center">
+                <tbody>
+                  ${Report.dateGridRows(a.blockDates, 10).map((row, ri) => {
+                    const st = a.milestone - CONFIG.mileageUnit + 1 + ri * 10;
+                    const en = st + row.length - 1;
+                    return `<tr style="border-bottom:1px solid #e2e8f0">
+                      <th style="padding:.3rem .5rem;background:#f1f5f9;color:#475569;width:80px;white-space:nowrap">${st}~${en}회</th>
+                      ${row.map(d => `<td style="padding:.3rem .4rem;font-weight:600;color:#0f172a">${d}</td>`).join('')}
+                      ${Array.from({ length: 10 - row.length }).map(() => '<td style="background:#f8fafc"></td>').join('')}
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+            </div>
+          ` : ''}
           <details><summary>전체 예배 날짜 (${a.allDates.length}회)</summary>
             <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
           <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
@@ -1094,6 +1158,41 @@ const Admin = {
         현재 누적 출석: <b>${r.m.total}회</b> (도입 전 ${r.m.baseCount || 0}회 + 사진/시스템 ${r.m.atts.length}회)<br>
         달성된 회차의 <b>언제부(예배 달성 기준일)</b>는 자동으로 채워지며 수정할 수 있습니다. <b>언제 건의신청(부대 건의일)</b>을 확인 후 저장해 주세요.
       </p>
+      ${(() => {
+        const tl = Store.timeline(r.m);
+        const earned = Math.floor(r.m.total / U);
+        if (!earned) return '';
+        const blocksHtml = [];
+        for (let s = 1; s <= earned && s <= 5; s++) {
+          const st = (s - 1) * U + 1;
+          const en = s * U;
+          const slice = tl.slice(st - 1, en);
+          if (!slice.length) continue;
+          const rows = Report.dateGridRows(slice, 10);
+          blocksHtml.push(`
+            <div style="margin-bottom:.5rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:.4rem .6rem">
+              <div style="font-weight:700;font-size:.8rem;color:#1e3a8a;margin-bottom:.2rem">${s}차 (${st}~${en}회) 출석 날짜 (월-일):</div>
+              <table style="width:100%;font-size:.78rem;border-collapse:collapse;text-align:center">
+                <tbody>
+                  ${rows.map((row, ri) => `
+                    <tr style="border-bottom:1px solid #e2e8f0">
+                      <th style="padding:.2rem .4rem;background:#f1f5f9;width:70px;white-space:nowrap">${st + ri*10}~${st + ri*10 + row.length - 1}회</th>
+                      ${row.map(d => `<td style="padding:.2rem .3rem;font-weight:600">${d}</td>`).join('')}
+                      ${Array.from({ length: 10 - row.length }).map(() => '<td style="background:#f8fafc"></td>').join('')}
+                    </tr>
+                  `).join('')}
+                </tbody>
+              </table>
+            </div>
+          `);
+        }
+        return `
+          <details style="margin-bottom:.8rem" open>
+            <summary style="cursor:pointer;font-weight:700;color:var(--navy);font-size:.85rem">📅 24회 단위 회기별 출석 날짜표 (10개씩 3줄)</summary>
+            <div style="margin-top:.4rem">${blocksHtml.join('')}</div>
+          </details>
+        `;
+      })()}
       <form class="mform" id="gf">
         ${r.slots.map(sl => {
           const isReached = r.m.total >= sl.count;
@@ -1146,11 +1245,56 @@ const Admin = {
           <li><b>24회(1차) ~ 120회(5차)</b>의 <b>기준일</b>(예배 기준일)과 <b>건의일</b>(부대 건의일)을 <code>26.02.01</code> 또는 <code>26-2-1</code> 형식으로 입력하면 그대로 등록됩니다.</li>
           <li>이미 등록된 형제도 엑셀에 마일리지 기준일/건의일을 적어 다시 올리면 자동으로 업데이트됩니다.</li>
         </ol>
-        <div class="row">
+        <div class="row" style="margin-bottom:.8rem">
           <a class="btn ghost" href="templates/명단_일괄등록_양식.xlsx" download>📄 엑셀 양식 내려받기 (24~120회 기준일·건의일 포함)</a>
-          <label class="file-btn btn primary">📂 작성한 엑셀 파일 선택<input type="file" id="xf" accept=".xlsx,.xls,.csv" hidden></label>
+          <label class="file-btn btn primary">📂 명단 엑셀 파일 선택<input type="file" id="xf" accept=".xlsx,.xls,.csv" hidden></label>
+        </div>
+        <div style="padding:.8rem 1rem;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:10px">
+          <div style="font-weight:700;color:#065f46;margin-bottom:.3rem">📅 지난 1년간 예배 출석이력(타임라인) 엑셀 일괄 등록</div>
+          <p class="muted" style="margin:0 0 .5rem;font-size:.82rem;color:#047857">
+            사진 판독 결과로 생성된 <code>출석이력_정리_25.10-26.11.xlsx</code> 파일을 선택하면, 인원별로 1회부터 최종 누적까지의 출석 날짜(00.00.00 포함)를 데이터베이스에 일괄 저장합니다.
+          </p>
+          <label class="file-btn btn primary" style="background:#059669">
+            📂 출석이력 엑셀 선택 및 일괄 저장<input type="file" id="xf-timeline" accept=".xlsx,.xls" hidden>
+          </label>
         </div>
       </div><div id="xprev"></div>`;
+    $('#xf-timeline').onchange = async e => {
+      const f = e.target.files[0]; if (!f) return;
+      if (typeof XLSX === 'undefined') return Modal.alert('엑셀 읽기 도구를 불러오지 못했어요.');
+      try {
+        const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
+        const ws = wb.Sheets['출석이력(앱등록용)'] || wb.Sheets[wb.SheetNames[0]];
+        const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
+        const hi = aoa.findIndex(r => r.some(c => String(c).includes('이름')));
+        if (hi < 0) return Modal.alert('‘이름’ 열을 찾지 못했어요.');
+        const H = aoa[hi].map(c => String(c).trim());
+        const uCol = H.findIndex(c => c.includes('소속') || c.includes('부대'));
+        const nCol = H.findIndex(c => c.includes('이름'));
+        const dCol = H.findIndex(c => c.includes('전역'));
+        const lCol = H.findIndex(c => c.includes('출석일자') || c.includes('목록'));
+        if (uCol < 0 || nCol < 0 || lCol < 0) return Modal.alert('필수 열(소속, 이름, 출석일자 목록)을 찾지 못했어요.');
+
+        const batch = [];
+        aoa.slice(hi + 1).forEach(r => {
+          const name = String(r[nCol] || '').replace(/\s/g, '');
+          if (!name) return;
+          const unit = String(r[uCol] || '').trim();
+          const dischargeDate = normalizeDate(r[dCol]);
+          const datesStr = String(r[lCol] || '').trim();
+          const pastDates = Store.parseDateList(datesStr);
+          batch.push({ unit, name, dischargeDate, pastDates });
+        });
+
+        if (!await Modal.confirm(`엑셀에서 <b>${batch.length}명</b>의 출석이력 날짜 목록을 확인했습니다.<br>전체 형제의 과거 예배 출석이력으로 저장할까요?`, '출석이력 일괄 저장')) return;
+        const res = await Store.applyPastDatesBatch(batch);
+        await Modal.alert(`성공적으로 저장되었습니다!<br>· 업데이트 완료: <b>${res.updated}명</b><br>· 일치 인원 없음(건너뜀): ${res.missed}명`);
+        this.open('mileage');
+      } catch (err) {
+        Modal.alert('출석이력 처리 중 오류: ' + esc(err.message));
+      }
+    };
+
     $('#xf').onchange = async e => {
       const f = e.target.files[0]; if (!f) return;
       if (typeof XLSX === 'undefined') return Modal.alert('엑셀 읽기 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');

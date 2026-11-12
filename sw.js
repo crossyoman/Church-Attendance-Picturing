@@ -1,5 +1,5 @@
 /* 오프라인 캐시 (항상 최신 본을 먼저 시도하고, 안 되면 캐시 사용) */
-const CACHE = 'cheongun-v23';
+const CACHE = 'cheongun-v24';
 const ASSETS = ['./', './index.html', './css/style.css?v=23', './js/config.js?v=23', './js/db.js?v=23', './js/api.js?v=23', './js/store.js?v=23',
   './js/report.js?v=23', './js/camera.js?v=23', './js/admin.js?v=23', './js/app.js?v=23', './manifest.json', './icon.svg'];
 

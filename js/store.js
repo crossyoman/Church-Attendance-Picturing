@@ -36,12 +36,33 @@ function normalizeDate(v) {
     const d = new Date(Math.round((v - 25569) * 864e5));
     return fmtDate(new Date(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
   }
-  const m = String(v).trim().match(/^(\d{2,4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
+  const t = String(v).trim();
+  // 숫자만 입력해도 인식: 261112 / 20261112
+  const dg = t.match(/^(\d{2}|\d{4})(\d{2})(\d{2})$/);
+  if (dg) {
+    let y = +dg[1]; if (y < 100) y += 2000;
+    const d = new Date(y, +dg[2] - 1, +dg[3]);
+    return (isNaN(d) || d.getMonth() !== +dg[2] - 1) ? '' : fmtDate(d);
+  }
+  const m = t.match(/^(\d{2,4})[.\-\/년\s]+(\d{1,2})[.\-\/월\s]+(\d{1,2})/);
   if (!m) return '';
   let y = +m[1]; if (y < 100) y += 2000;
   const d = new Date(y, +m[2] - 1, +m[3]);
   if (isNaN(d) || d.getMonth() !== +m[2] - 1) return '';
   return fmtDate(d);
+}
+
+/** 사진 명단에서 날짜를 알 수 없는 출석 (표기: 00-00 / 00.00.00) */
+const UNKNOWN_DATE = '0000-00-00';
+const isUnknownDate = s => !s || String(s).startsWith('0000');
+/** 월-일 표기 (날짜를 모르면 00-00) */
+const fmtMD = s => (isUnknownDate(s) ? '00-00' : String(s).slice(5, 10));
+/** '26.02.01, 00.00.00 ...' 형태의 문자열 → ['2026-02-01', '0000-00-00', ...] */
+function parseDateList(v) {
+  return String(v || '').split(/[,;\s·]+/).map(t => t.trim()).filter(Boolean).map(t => {
+    if (/^0{2,4}[.\-\/]0{1,2}[.\-\/]0{1,2}$/.test(t)) return UNKNOWN_DATE;
+    return normalizeDate(t);
+  }).filter(Boolean);
 }
 
 /** 날짜를 26.02.01 (YY.MM.DD) 형식으로 표기 */
@@ -173,6 +194,7 @@ const Store = {
       baseGrantedBlocks: Math.max(+p.baseGrantedBlocks || 0, slotBlocks), // 마일리지 지급 차수
       baseLastDate: p.baseLastDate || null,         // 시스템 도입 전 마지막 출석일
       mileageSlots,                                 // 1~5차 (24/48/72/96/120회) 기준일·건의일
+      pastDates: Array.isArray(p.pastDates) ? p.pastDates.slice() : [],   // 사진촬영 전 출석일 목록 (모르면 0000-00-00)
       createdAt: todayStr(),
     };
     await DB.put('members', m);
@@ -221,6 +243,7 @@ const Store = {
         const slotBlocks = normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0);
         ex.baseCount = p.baseCount !== undefined && p.baseCount !== '' ? (+p.baseCount || 0) : ex.baseCount;
         if (p.baseLastDate) ex.baseLastDate = p.baseLastDate;
+        if (Array.isArray(p.pastDates) && p.pastDates.length) ex.pastDates = p.pastDates.slice();
         ex.mileageSlots = normSlots;
         ex.baseGrantedBlocks = Math.max(ex.baseGrantedBlocks || 0, +p.baseGrantedBlocks || 0, slotBlocks);
         await DB.put('members', ex);
@@ -410,6 +433,42 @@ const Store = {
     const byId = Object.fromEntries(ms.map(m => [m.id, m]));
     return att.filter(a => a.manual).sort((a, b) => b.createdAt - a.createdAt).slice(0, limit)
       .map(a => ({ ...a, member: byId[a.memberId] }));
+  },
+
+  /* ---------- 출석 타임라인 (사진촬영 전 출석일 + 앱 기록) ---------- */
+  /** 1회째부터 순서대로 [{date, unknown, att?}] — 도입 전 날짜는 m.pastDates, 이후는 앱 출석 기록 */
+  timeline(m, atts) {
+    const base = m.baseCount || 0;
+    let past = Array.isArray(m.pastDates) ? m.pastDates.slice() : [];
+    if (past.length > base) past = past.slice(0, base);
+    while (past.length < base) past.unshift(UNKNOWN_DATE);
+    const list = (atts || m.atts || []).slice().sort((a, b) => a.ts - b.ts);
+    return [
+      ...past.map(d => ({ date: d, unknown: isUnknownDate(d) })),
+      ...list.map(a => ({ date: a.date, unknown: false, att: a })),
+    ];
+  },
+
+  /** 출석이력 엑셀 반영: [{unit, name, dates:[...]}] → 형제별 pastDates 저장 */
+  async applyPastDatesBatch(list) {
+    const ms = await DB.all('members');
+    const res = { applied: 0, missing: [], ambiguous: [], countDiff: [] };
+    const changed = [];
+    for (const it of list) {
+      const hit = ms.filter(m => m.unit === it.unit && m.name === it.name && (!it.dc || !m.dischargeDate || m.dischargeDate === it.dc));
+      if (!hit.length) { res.missing.push(`${it.unit} ${it.name}`); continue; }
+      if (hit.length > 1) { res.ambiguous.push(`${it.unit} ${it.name}`); continue; }
+      const m = hit[0];
+      m.pastDates = it.dates.slice();
+      if ((m.baseCount || 0) !== it.dates.length) res.countDiff.push(`${it.unit} ${it.name} (앱 ${m.baseCount || 0}회 / 엑셀 ${it.dates.length}회)`);
+      await DB.put('members', m);
+      changed.push(m);
+      res.applied++;
+    }
+    if (changed.length && typeof Backend !== 'undefined') {
+      await Backend.enqueue('upsertMembersBatch', { members: changed });
+    }
+    return res;
   },
 
   /* ---------- 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ---------- */
