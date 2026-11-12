@@ -13,6 +13,7 @@ const Admin = {
     ['manual', '✍️ 수동 출석'],
     ['mileage', '🎖 마일리지'],
     ['import', '📥 엑셀 등록'],
+    ['export', '📤 전체 엑셀 전송'],
     ['discharged', '🗂 전역자'],
     ['settings', '⚙️ 설정'],
   ],
@@ -994,6 +995,7 @@ const Admin = {
         <label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미건의 대상자만 보기</label>
         <label><input type="checkbox" id="only-earned" ${this.onlyEarned ? 'checked' : ''}> 24회 이상자만 보기</label>
         <button class="btn ghost small" id="mil-xl">📊 마일리지 표 엑셀 다운로드</button>
+        <button class="btn primary small" id="mil-export-all" style="background:#1e3a8a">📤 전체 출석기록 엑셀 전송</button>
       </div>
       <div id="mil-table-wrap"></div>`;
 
@@ -1147,6 +1149,7 @@ const Admin = {
     $('#only-pending').onchange = drawTable;
     $('#only-earned').onchange = drawTable;
     $('#mil-xl').onclick = () => this.exportExcel();
+    $('#mil-export-all').onclick = () => this.open('export');
     drawTable();
   },
 
@@ -1450,6 +1453,226 @@ const Admin = {
       await Modal.alert(`총 ${ok.length}명(신규 ${newCnt}명, 업데이트 ${updCnt}명)의 명단 및 마일리지 기록을 반영했습니다.`);
       this.open('mileage');
     };
+  },
+
+  /* ===================== 전체인원 출석기록 엑셀 전송 / 다운로드 ===================== */
+  async tab_export(body) {
+    const people = await Store.allPeopleFull();
+    const activePeople = people.filter(p => !p.discharged);
+    const dischargedPeople = people.filter(p => p.discharged);
+    const withTimeline = people.filter(p => (p.pastDates && p.pastDates.length) || p.atts.length);
+    const earnedMileage = people.filter(p => Math.floor(p.total / CONFIG.mileageUnit) > 0);
+
+    body.innerHTML = `
+      <div class="card" style="border:2px solid #2563eb;background:#f0f7ff;margin-bottom:1.2rem">
+        <div style="display:flex;align-items:center;gap:.6rem;margin-bottom:.5rem">
+          <span style="font-size:1.8rem">📤</span>
+          <div>
+            <h3 style="margin:0;color:#1e3a8a">전체 인원 출석기록 · 마일리지 통합 엑셀 전송</h3>
+            <div class="muted" style="font-size:.85rem;margin-top:.2rem">
+              1회차부터 최종 누적까지의 <b>모든 출석일자(타임라인)</b>, <b>마일리지 1~5차 기준일·건의일</b>, <b>24회 회기별 10x3 날짜표</b>를 한 번에 엑셀로 내려받거나 메일로 전송합니다.
+            </div>
+          </div>
+        </div>
+
+        <div class="row" style="margin:.8rem 0;gap:.6rem;flex-wrap:wrap">
+          <button class="btn primary" id="btn-export-mail" style="font-weight:700;font-size:.95rem;padding:.6rem 1.2rem;background:#1e3a8a">
+            📧 1) 전체 출석기록 엑셀 메일 보내기 (스마트폰/Gmail 연동)
+          </button>
+          <button class="btn primary" id="btn-export-dl" style="font-weight:700;font-size:.95rem;padding:.6rem 1.2rem;background:#16a34a">
+            📊 2) 전체 출석기록 엑셀(.xlsx) 파일 즉시 다운로드
+          </button>
+        </div>
+
+        <p class="hint" style="margin:0;color:#1e293b">
+          ※ <b>스마트폰(안드로이드)</b>에서는 <b>‘📧 1) 전체 출석기록 엑셀 메일 보내기’</b>를 누르면 메일 앱(Gmail)에 통합 엑셀 파일이 첨부되어 즉시 전송 화면이 열립니다.<br>
+          ※ <b>PC / 데스크탑</b>에서는 엑셀 다운로드와 동시에 Gmail 작성 창이 열립니다.
+        </p>
+      </div>
+
+      <div class="card" style="margin-bottom:1.2rem">
+        <h3 style="margin-top:0;color:#0f172a">📊 포함되는 시트 구성 및 현황 요약</h3>
+        <div style="display:grid;grid-template-columns:repeat(auto-fit, minmax(220px, 1fr));gap:.8rem;margin-top:.6rem">
+          <div style="background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.8rem">
+            <div style="font-weight:700;color:#1e3a8a">1. 전체인원_마일리지및출석현황</div>
+            <div style="font-size:.82rem;color:#475569;margin-top:.3rem">
+              현역 ${activePeople.length}명 + 전역자 ${dischargedPeople.length}명<br>
+              · 24~120회 기준일/건의일<br>
+              · 최근 출석일 및 최초 1회 출석일
+            </div>
+          </div>
+          <div style="background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.8rem">
+            <div style="font-weight:700;color:#2563eb">2. 인원별_전체출석타임라인</div>
+            <div style="font-size:.82rem;color:#475569;margin-top:.3rem">
+              기록 보유 ${withTimeline.length}명<br>
+              · 1회부터 최대 누적회차까지의 모든 날짜 가로 나열<br>
+              · 24회 배수 달성일 하이라이트
+            </div>
+          </div>
+          <div style="background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.8rem">
+            <div style="font-weight:700;color:#166534">3. 24회단위_회기별출석표 (10x3)</div>
+            <div style="font-size:.82rem;color:#475569;margin-top:.3rem">
+              24회 달성자 ${earnedMileage.length}명 대상<br>
+              · 포상 건의용 회기별 24회 출석일<br>
+              · 10개씩 3줄 (10/10/4) 월-일 표
+            </div>
+          </div>
+          <div style="background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.8rem">
+            <div style="font-weight:700;color:#b45309">4. 시스템_사진인증_출석기록</div>
+            <div style="font-size:.82rem;color:#475569;margin-top:.3rem">
+              앱 내 사진촬영/수동 출석 로그 전체<br>
+              · 날짜, 요일, 시간, 소속, 이름<br>
+              · 인증 구분 및 사진 파일명
+            </div>
+          </div>
+        </div>
+      </div>
+    `;
+
+    const makeFile = async () => {
+      return await this.buildFullAttendanceExcelFile();
+    };
+
+    $('#btn-export-dl', body).onclick = async () => {
+      const f = await makeFile();
+      if (!f) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
+      downloadBlob(f, f.name);
+    };
+
+    $('#btn-export-mail', body).onclick = async () => {
+      const f = await makeFile();
+      if (!f) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
+      const title = `[${CONFIG.churchName}] 전체 인원 출석기록 및 마일리지 종합 현황 (${todayStr()})`;
+      const text = `[${CONFIG.churchName} 전체 인원 출석기록 및 마일리지 종합 현황]
+기준일: ${todayStr()}
+대상: 전체 등록 인원 ${people.length}명 (현역 ${activePeople.length}명, 전역 ${dischargedPeople.length}명)
+
+첨부파일 안내:
+1) 전체인원_마일리지및출석현황 시트 (1~5차 기준일·건의일)
+2) 인원별_전체출석타임라인 시트 (1회~최종 누적 출석일 전체)
+3) 24회단위_회기별출석표(10x3) 시트 (마일리지 건의용 회기별 24회 출석일자)
+4) 시스템_사진인증_출석기록 시트 (시스템 상세 출석 로그)`;
+      shareReport(title, text, [f], [f]);
+    };
+  },
+
+  /** 전체 인원 출석기록 + 마일리지 통합 엑셀 파일 생성 */
+  async buildFullAttendanceExcelFile() {
+    if (typeof XLSX === 'undefined') return null;
+    const people = await Store.allPeopleFull();
+    const wb = XLSX.utils.book_new();
+
+    // 1. 전체인원_마일리지및출석현황 시트 (2행 헤더)
+    const aoa1 = [
+      ['상태', '소속부대', '이름', '전역일', '누적출석', '24회(1차)', '', '48회(2차)', '', '72회(3차)', '', '96회(4차)', '', '120회(5차)', '', '최근출석일', '최초출석(1회)'],
+      ['', '', '', '', '', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '', ''],
+    ];
+    people.forEach(p => {
+      const slots = Store.getMemberSlots(p, p.grants);
+      const tl = Store.timeline(p);
+      const row = [
+        p.discharged ? '전역' : '현역',
+        unitLabel(p),
+        p.name,
+        fmtYYMMDD(p.dischargeDate),
+        p.total,
+      ];
+      slots.forEach(sl => {
+        row.push(fmtYYMMDD(sl.baseDate), fmtYYMMDD(sl.proposedDate));
+      });
+      row.push(tl.length ? fmtYYMMDD(tl[tl.length - 1].date) : fmtYYMMDD(p.last || ''));
+      row.push(tl.length ? fmtYYMMDD(tl[0].date) : '');
+      aoa1.push(row);
+    });
+    const ws1 = XLSX.utils.aoa_to_sheet(aoa1);
+    ws1['!merges'] = [
+      { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
+      { s: { r: 0, c: 1 }, e: { r: 1, c: 1 } },
+      { s: { r: 0, c: 2 }, e: { r: 1, c: 2 } },
+      { s: { r: 0, c: 3 }, e: { r: 1, c: 3 } },
+      { s: { r: 0, c: 4 }, e: { r: 1, c: 4 } },
+      { s: { r: 0, c: 5 }, e: { r: 0, c: 6 } },
+      { s: { r: 0, c: 7 }, e: { r: 0, c: 8 } },
+      { s: { r: 0, c: 9 }, e: { r: 0, c: 10 } },
+      { s: { r: 0, c: 11 }, e: { r: 0, c: 12 } },
+      { s: { r: 0, c: 13 }, e: { r: 0, c: 14 } },
+      { s: { r: 0, c: 15 }, e: { r: 1, c: 15 } },
+      { s: { r: 0, c: 16 }, e: { r: 1, c: 16 } },
+    ];
+    XLSX.utils.book_append_sheet(wb, ws1, '전체인원_마일리지및출석현황');
+
+    // 2. 인원별_전체출석타임라인 (1회부터 최대 회차까지)
+    let maxCnt = 1;
+    people.forEach(p => {
+      const tl = Store.timeline(p);
+      if (tl.length > maxCnt) maxCnt = tl.length;
+    });
+    const head2 = ['상태', '소속부대', '이름', '전역일', '누적출석'];
+    for (let i = 1; i <= maxCnt; i++) head2.push(`${i}회`);
+    const aoa2 = [head2];
+    people.forEach(p => {
+      const tl = Store.timeline(p);
+      const row = [
+        p.discharged ? '전역' : '현역',
+        unitLabel(p),
+        p.name,
+        fmtYYMMDD(p.dischargeDate),
+        p.total,
+      ];
+      for (let i = 0; i < maxCnt; i++) {
+        row.push(tl[i] ? fmtYYMMDD(tl[i].date) : '');
+      }
+      aoa2.push(row);
+    });
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa2), '인원별_전체출석타임라인');
+
+    // 3. 24회단위_회기별출석표 (10개씩 3줄)
+    const U = CONFIG.mileageUnit;
+    const aoa3 = [
+      ['소속부대', '이름', '전역일', '누적출석', '해당회차', '구간', '1', '2', '3', '4', '5', '6', '7', '8', '9', '10']
+    ];
+    people.forEach(p => {
+      const earned = Math.floor(p.total / U);
+      if (earned <= 0) return;
+      const tl = Store.timeline(p);
+      for (let s = 1; s <= earned && s <= 5; s++) {
+        const st = (s - 1) * U + 1;
+        const en = s * U;
+        const slice = tl.slice(st - 1, en);
+        const rows = Report.dateGridRows(slice, 10);
+        rows.forEach((rowDates, ri) => {
+          const f = st + ri * 10;
+          const to = f + rowDates.length - 1;
+          const pad = Array.from({ length: 10 - rowDates.length }).map(() => '');
+          aoa3.push([
+            ri === 0 ? unitLabel(p) : '',
+            ri === 0 ? p.name : '',
+            ri === 0 ? fmtYYMMDD(p.dischargeDate) : '',
+            ri === 0 ? p.total : '',
+            ri === 0 ? `${s}차 (${s*U}회)` : '',
+            `${f}~${to}회`,
+            ...rowDates,
+            ...pad,
+          ]);
+        });
+      }
+    });
+    if (aoa3.length > 1) {
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa3), '24회단위_회기별출석표(10x3)');
+    }
+
+    // 4. 시스템_사진인증_출석기록
+    const att = people.flatMap(p => p.atts.map(a => ({
+      날짜: a.date, 요일: weekdayOf(a.date), 시간: a.time, 소속: unitLabel(p), 이름: p.name,
+      구분: a.manual ? '수동' : '사진', 사유: a.reason || '', 사진파일명: a.hasPhoto ? (a.fileName + '.jpg') : '',
+    }))).sort((a, b) => (a.날짜 + a.시간).localeCompare(b.날짜 + b.시간));
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(att.length ? att : [{ 안내: '시스템 출석 기록이 없습니다.' }]), '시스템_사진인증_출석기록');
+
+    const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
+    const fileName = `천군교회_전체인원_출석기록_및_마일리지현황_${todayStr()}.xlsx`;
+    return new File([wbout], fileName, {
+      type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
+    });
   },
 
   /* ===================== 전역자 보관함 ===================== */
