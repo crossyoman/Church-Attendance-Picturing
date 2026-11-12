@@ -354,7 +354,7 @@ const App = {
     }
   },
 
-  /* ---------- 7. 저장 완료 (사진 확인 + 다시 찍기 / 기록 취소) ---------- */
+  /* ---------- 7. 저장 완료 (사진 확인 + 기록 취소) ---------- */
   done({ member, total, att, blob, isNew, back }) {
     const U = CONFIG.mileageUnit;
     const url = URL.createObjectURL(blob);
@@ -370,20 +370,18 @@ const App = {
           <div class="done-actions-stack">
             <button class="btn primary done-ok-giant" id="done-ok">✔ 확인</button>
             <div class="done-sub-actions">
-              <button class="btn ghost small" id="done-retake">↺ 다시 찍기</button>
-              <button class="btn ghost small danger-text" id="done-cancel">✕ 기록 취소</button>
+              <button class="btn ghost small danger-text" id="done-cancel">✕ 사진·출석 취소하고 다시 찍기</button>
             </div>
           </div>
-          <p class="hint">사진이 잘못 나왔다면 ‘다시 찍기’를, 이름을 잘못 골랐다면 ‘기록 취소’를 눌러 주세요.</p>
+          <p class="hint">사진이 흔들렸거나 잘못 찍혔다면 아래 <b>‘✕ 사진·출석 취소하고 다시 찍기’</b>를 눌러 주세요.</p>
         </div>
       </div>`);
     Sound.chime();
     const cleanup = () => URL.revokeObjectURL(url);
     $('#done-ok').onclick = () => { cleanup(); this.home(); };
-    $('#done-retake').onclick = () => { cleanup(); this.camera({ retake: { att, member, isNew, back } }); };
     $('#done-cancel').onclick = async () => {
       clearTimeout(this.doneTimer);
-      if (!await Modal.confirm('방금 저장한 출석 기록을 취소할까요?<br>취소 후 처음부터 다시 출석할 수 있어요.', '기록 취소', '돌아가기')) {
+      if (!await Modal.confirm('방금 저장한 사진과 출석 기록을 취소할까요?<br>취소 즉시 처음부터 다시 깨끗하게 출석 사진을 찍을 수 있어요.', '출석 취소', '돌아가기')) {
         this.doneTimer = setTimeout(() => this.home(), 30000);
         return;
       }
