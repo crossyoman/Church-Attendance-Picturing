@@ -66,24 +66,47 @@ const Report = {
     }
     achievers.sort((a, b) => unitOrder(unitLabel(a.person)) - unitOrder(unitLabel(b.person)) || koSort(a.person, b.person));
 
-    // 선택된 기간 동안 출석한 전체 기록 (부대별 누가 출석했는지)
+    // 선택된 기간 동안 출석한 전체 기록 (부대별 누가 출석했는지) 및 처음 온 사람(신규 첫 출석자) 집계
     const inWin = [];
+    const firstTimers = [];
     people.forEach(p => {
       const base = p.baseCount || 0;
+      const attsBefore = p.atts.filter(a => a.ts <= start);
+      const attsInWin = p.atts.filter(a => a.ts > start && a.ts <= end);
+
+      if (base === 0 && attsBefore.length === 0 && attsInWin.length > 0) {
+        const repAtt = attsInWin.find(a => a.hasPhoto) || attsInWin[0];
+        firstTimers.push({
+          ...repAtt,
+          person: p,
+          label: unitLabel(p),
+          memberName: p.name,
+          dischargeDate: p.dischargeDate,
+          cumCount: 1,
+          totalNow: p.total,
+          isFirstVisit: true,
+        });
+      }
+
       p.atts.forEach((a, idx) => {
         if (a.ts > start && a.ts <= end) {
+          const cumCount = base + idx + 1;
           inWin.push({
             ...a,
+            person: p,
             label: unitLabel(p),
             memberName: p.name,
             dischargeDate: p.dischargeDate,
-            cumCount: base + idx + 1,
+            cumCount,
             totalNow: p.total,
+            isFirstVisit: cumCount === 1,
           });
         }
       });
     });
-    inWin.sort((a, b) => a.date.localeCompare(b.date) || unitOrder(a.label) - unitOrder(b.label) || a.time.localeCompare(b.time) || a.memberName.localeCompare(b.memberName, 'ko'));
+    const sortAtts = (a, b) => a.date.localeCompare(b.date) || unitOrder(a.label) - unitOrder(b.label) || a.time.localeCompare(b.time) || a.memberName.localeCompare(b.memberName, 'ko');
+    inWin.sort(sortAtts);
+    firstTimers.sort(sortAtts);
 
     const dates = [...new Set(inWin.map(a => a.date))].sort();
     const rows = allUnitLabels().map(u => {
@@ -101,6 +124,7 @@ const Report = {
       endDateStr: endDateStr || fmtDate(cutoff),
       isCustomRange: !!(startDateStr && endDateStr),
       achievers,
+      firstTimers,
       periodAtts: inWin,
       people,
       stats: { dates, rows, totals },
@@ -131,11 +155,25 @@ const Report = {
   /** 이메일 본문용 텍스트 */
   text(r) {
     const achPhotoCount = (r.achievers || []).reduce((sum, a) => sum + (a.block || []).filter(b => b.hasPhoto).length, 0);
+    const firstList = r.firstTimers || [];
+    const firstPhotoCount = firstList.filter(a => a.hasPhoto).length;
     const L = [];
     L.push(`[${CONFIG.churchName} 주간 예배 출석 리포트 및 통계]`);
     L.push(`기간: ${this.periodText(r)}`);
-    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일  2) 24회 마일리지 달성자 최근 24회 인증 사진 (${achPhotoCount}장)`);
+    L.push(`첨부: 1) 주간 출석명단·부대통계·마일리지 엑셀 파일  2) 24회 마일리지 달성자 인증 사진 (${achPhotoCount}장)  3) 처음 온 사람 인증 사진 (${firstPhotoCount}장)`);
     L.push('');
+
+    // 오늘(기간 내) 처음 온 사람 명단
+    L.push(`■ 오늘(기간 내) 처음 온 사람 명단 (${firstList.length}명)`);
+    if (!firstList.length) {
+      L.push('  - 이 기간에 처음 온 신규 출석자가 없습니다.');
+    } else {
+      firstList.forEach((a, idx) => {
+        L.push(`  ${idx + 1}) [${a.label}] ${a.memberName} (전역: ${a.dischargeDate || '미기입'}) - ${a.date}(${weekdayOf(a.date)}) ${a.time} 첫 출석 (${a.hasPhoto ? '사진인증: ' + a.fileName + '.jpg' : '수동입력'})`);
+      });
+    }
+    L.push('');
+
     L.push(`■ ${CONFIG.mileageUnit}회 마일리지 달성자 (${r.achievers.length}명)`);
     if (!r.achievers.length) {
       L.push('  - 이 기간 신규 마일리지 달성자가 없습니다.');
@@ -201,11 +239,36 @@ const Report = {
         allUnitLabels().forEach(u => {
           const uList = dayList.filter(a => a.label === u.label);
           if (uList.length) {
-            L.push(`   · ${u.label} (${uList.length}명): ` + uList.map(a => `${a.memberName}(${a.time}, 누적${a.cumCount}회${a.manual ? ', 수동' : ''})`).join(', '));
+            L.push(`   · ${u.label} (${uList.length}명): ` + uList.map(a => `${a.memberName}(${a.time}, 누적${a.cumCount}회${a.isFirstVisit ? '·첫출석' : ''}${a.manual ? ', 수동' : ''})`).join(', '));
           }
         });
       });
     }
+    return L.join('\n');
+  },
+
+  /** 처음 온 사람 사진 메일 발송용 본문 */
+  firstTimersText(r) {
+    const firstList = r.firstTimers || [];
+    const firstPhotoCount = firstList.filter(a => a.hasPhoto).length;
+    const L = [];
+    L.push(`[${CONFIG.churchName} 처음 온 사람(신규 출석자) 명단 및 인증 사진]`);
+    L.push(`기간: ${this.periodText(r)}`);
+    L.push(`첨부: 처음 온 사람 예배 출석 인증 사진 (${firstPhotoCount}장)`);
+    L.push('');
+    L.push(`■ 오늘(기간 내) 처음 온 사람 명단 (총 ${firstList.length}명)`);
+    if (!firstList.length) {
+      L.push('  - 이 기간에 처음 온 신규 출석자가 없습니다.');
+    } else {
+      firstList.forEach((a, idx) => {
+        L.push(`  ${idx + 1}) [${a.label}] ${a.memberName} (전역: ${a.dischargeDate || '미기입'})`);
+        L.push(`     · 첫 출석 일시: ${a.date}(${weekdayOf(a.date)}) ${a.time}`);
+        L.push(`     · 사진 파일명: ${a.hasPhoto ? a.fileName + '.jpg' : '사진 없음(수동)'}`);
+      });
+    }
+    L.push('');
+    L.push('==================================================');
+    L.push(this.text(r));
     return L.join('\n');
   },
 
@@ -227,6 +290,24 @@ const Report = {
     lines.push(rowToCsv(['부대', ...s.dates.map(d => `${d}(${weekdayOf(d)})`), '합계']));
     s.rows.forEach(row => lines.push(rowToCsv([row.label, ...row.counts, row.sum])));
     lines.push(rowToCsv(['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)]));
+    lines.push('');
+
+    // 1-2. 오늘(기간 내) 처음 온 사람 명단
+    lines.push(rowToCsv(['[처음 온 사람(신규 출석자) 명단]']));
+    lines.push(rowToCsv(['연번', '첫출석날짜', '요일', '첫출석시간', '소속부대', '이름', '전역일', '출석구분', '사진파일명']));
+    (r.firstTimers || []).forEach((a, idx) => {
+      lines.push(rowToCsv([
+        idx + 1,
+        a.date,
+        weekdayOf(a.date),
+        a.time,
+        a.label,
+        a.memberName,
+        fmtYYMMDD(a.dischargeDate),
+        a.manual ? '수동입력' : '사진촬영',
+        a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
+      ]));
+    });
     lines.push('');
 
     // 2. 기간 내 출석자 전체 명단
@@ -311,6 +392,24 @@ const Report = {
       ['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)],
     ];
     XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(statAoa), '날짜별_부대통계');
+
+    // 1-2. 처음_온_사람_명단 시트
+    const firstRows = (r.firstTimers || []).map((a, idx) => ({
+      연번: idx + 1,
+      첫출석날짜: a.date,
+      요일: weekdayOf(a.date),
+      첫출석시간: a.time,
+      소속부대: a.label,
+      이름: a.memberName,
+      전역일: fmtYYMMDD(a.dischargeDate),
+      출석구분: a.manual ? '수동입력' : '사진촬영',
+      사진파일명: a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
+    }));
+    XLSX.utils.book_append_sheet(
+      wb,
+      XLSX.utils.json_to_sheet(firstRows.length ? firstRows : [{ 안내: '선택한 기간에 처음 온 신규 출석자가 없습니다.' }]),
+      '처음_온_사람_명단'
+    );
 
     // 2. 출석자_전체명단 시트
     const attRows = (r.periodAtts || []).map((a, idx) => ({

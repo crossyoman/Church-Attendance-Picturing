@@ -138,14 +138,16 @@ const Admin = {
       <div class="toolbar" style="gap:.5rem">
         <button class="btn primary" id="share-excel" style="font-weight:700">📧 1) 출석·통계 엑셀 메일 보내기</button>
         <button class="btn primary" id="share-ach-photos" style="font-weight:700;background:#1e3a8a">📸 2) 24회 달성자 사진 메일 보내기</button>
+        <button class="btn primary" id="share-first-photos" style="font-weight:700;background:var(--green)">🌱 3) 처음 온 사람 사진 메일 보내기</button>
         <button class="btn ghost small" id="dl-week-xl">📊 엑셀(.xlsx) 다운로드</button>
         <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
         💡 <b>리포트 메일 발송 안내 (안드로이드 Gmail 첨부 호환)</b>:<br>
-        스마트폰(안드로이드)에서 엑셀 파일과 사진(JPG)을 한 번에 섞어 보내면 Gmail 앱이 제목·본문·첨부를 빈칸으로 비워버리는 현상이 있어, <b>100% 누락 없이 첨부되도록 버튼 2개로 분리</b>했습니다.<br>
-        ① <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b>: 메일 제목·본문 + <b>주간 출석명단·부대통계·마일리지 엑셀 파일</b>이 Gmail에 즉시 세팅됩니다.<br>
-        ② <b>‘📸 2) 24회 달성자 사진 메일 보내기’</b>: 24회 달성자가 있는 주간에 누르시면 <b>달성자의 최근 24회 인증 사진들</b>이 Gmail에 즉시 첨부됩니다. (각 달성자 카드 안의 개별 발송 버튼을 쓰셔도 됩니다)
+        스마트폰(안드로이드)에서 엑셀 파일과 사진(JPG)을 한 번에 섞어 보내면 Gmail 앱이 제목·본문·첨부를 빈칸으로 비워버리는 현상이 있어, <b>100% 누락 없이 첨부되도록 용도별 버튼으로 분리</b>했습니다.<br>
+        ① <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b>: 메일 제목·본문(처음 온 사람 명단 포함) + <b>주간 출석명단·부대통계·마일리지 엑셀 파일</b>이 Gmail에 즉시 세팅됩니다.<br>
+        ② <b>‘📸 2) 24회 달성자 사진 메일 보내기’</b>: 24회 달성자의 <b>최근 24회 인증 사진들</b>이 Gmail에 즉시 첨부됩니다.<br>
+        ③ <b>‘🌱 3) 처음 온 사람 사진 메일 보내기’</b>: 이번 기간에 <b>처음 온 신규 출석자들의 명단과 인증 사진들</b>을 따로 모아서 Gmail로 바로 발송합니다.
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
 
@@ -199,12 +201,42 @@ const Admin = {
     }
 
     const text = Report.text(r);
+    const firstText = Report.firstTimersText(r);
     const title = `[${CONFIG.churchName}] 주간 예배 출석 리포트 (${fmtDate(r.cutoff)})`;
+    const firstTimers = r.firstTimers || [];
 
     $('#rep').innerHTML = `
       <h3>기간: ${Report.periodText(r)}</h3>
       <h3>📋 날짜별 · 부대별 출석 현황</h3>
       ${this.statsTable(r.stats)}
+
+      <h3>🌱 오늘(기간 내) 처음 온 사람 명단 (총 ${firstTimers.length}명)</h3>
+      ${firstTimers.length ? `
+        <div class="card" style="border:2px solid #86efac;background:#f0fdf4">
+          <div class="tbl-wrap" style="max-height:240px;overflow-y:auto;background:#fff">
+            <table class="tbl">
+              <thead><tr><th>연번</th><th>첫 출석 일시</th><th>소속부대</th><th>이름</th><th>전역일</th><th>구분</th></tr></thead>
+              <tbody>
+                ${firstTimers.map((a, idx) => `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>${a.date}(${weekdayOf(a.date)}) ${a.time}</td>
+                    <td>${esc(a.label)}</td>
+                    <td><b>${esc(a.memberName)}</b> <span class="badge" style="background:var(--green)">🌱 첫출석</span></td>
+                    <td>${fmtYYMMDD(a.dischargeDate)}</td>
+                    <td>${a.manual ? `<span class="badge">수동</span> ${esc(a.reason || '')}` : '📸 사진인증'}</td>
+                  </tr>
+                `).join('')}
+              </tbody>
+            </table>
+          </div>
+          <div class="thumbs" id="first-timer-thumbs" style="margin-top:.7rem"><p class="muted">처음 온 사람 사진 불러오는 중…</p></div>
+          <div class="row" style="margin-top:.6rem">
+            <button class="btn small primary" style="background:var(--green);font-weight:700" id="btn-card-share-first">🌱 처음 온 사람 사진 메일 발송 (${firstTimers.filter(a => a.hasPhoto).length}장)</button>
+            <button class="btn small ghost" id="btn-card-dl-first">💾 처음 온 사람 사진(${firstTimers.filter(a => a.hasPhoto).length}장) 저장</button>
+          </div>
+        </div>
+      ` : '<p class="muted">이 기간에 처음 온 신규 출석자가 없습니다.</p>'}
 
       <h3>📋 기간 내 예배 출석자 명단 (총 ${(r.periodAtts || []).length}명)</h3>
       ${(r.periodAtts || []).length ? `
@@ -218,7 +250,7 @@ const Admin = {
                     <td>${idx + 1}</td>
                     <td>${a.date}(${weekdayOf(a.date)}) ${a.time}</td>
                     <td>${esc(a.label)}</td>
-                    <td><b>${esc(a.memberName)}</b></td>
+                    <td><b>${esc(a.memberName)}</b>${a.isFirstVisit ? ' <span class="badge" style="background:var(--green)">🌱 첫출석</span>' : ''}</td>
                     <td>${fmtYYMMDD(a.dischargeDate)}</td>
                     <td><b>${a.cumCount}회</b></td>
                     <td>${a.manual ? `<span class="badge">수동</span> ${esc(a.reason || '')}` : '📸 사진인증'}</td>
@@ -250,14 +282,18 @@ const Admin = {
 
       <details><summary>메일 본문 미리보기</summary><pre class="pre">${esc(text)}</pre></details>`;
 
+    if ($('#first-timer-thumbs')) {
+      await this.fillThumbs($('#first-timer-thumbs'), firstTimers);
+    }
     for (const el of $$('.ach-thumbs', $('#rep'))) {
       await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
     }
 
-    // 마일리지 달성자별 사진 미리 로드 (클릭 즉시 공유창이 뜨도록 사용자 제스처 보존)
-    const achieverPhotoListByIdx = await Promise.all(
-      r.achievers.map(a => photoFiles(a.block || []))
-    );
+    // 마일리지 달성자별 사진 및 처음 온 사람 사진 미리 로드 (클릭 즉시 공유창이 뜨도록 사용자 제스처 보존)
+    const [achieverPhotoListByIdx, firstTimerPhotos] = await Promise.all([
+      Promise.all(r.achievers.map(a => photoFiles(a.block || []))),
+      photoFiles(firstTimers),
+    ]);
     const allAchieverPhotos = achieverPhotoListByIdx.flat();
 
     $$('[data-share]').forEach(b => b.onclick = () => {
@@ -299,6 +335,10 @@ const Admin = {
     if (shareAchBtn) {
       shareAchBtn.textContent = `📸 2) 24회 달성자 사진 메일 보내기 (${allAchieverPhotos.length}장)`;
     }
+    const shareFirstBtn = $('#share-first-photos');
+    if (shareFirstBtn) {
+      shareFirstBtn.textContent = `🌱 3) 처음 온 사람 사진 메일 보내기 (${firstTimerPhotos.length}장)`;
+    }
 
     $('#share-excel').onclick = () => {
       shareReport(title, text, excelShareTarget, xlFileReady ? [xlFileReady] : [csvExcelFile]);
@@ -313,6 +353,19 @@ const Admin = {
       }
       shareReport(`${title} - 24회 달성자 인증사진(${allAchieverPhotos.length}장)`, text, allAchieverPhotos, allAchieverPhotos);
     };
+
+    const doShareFirstPhotos = () => {
+      if (!firstTimers.length) {
+        return Modal.alert('선택한 기간에 처음 온 신규 출석자가 없습니다.');
+      }
+      if (!firstTimerPhotos.length) {
+        return Modal.alert('처음 온 사람의 사진 인증 기록이 없습니다.');
+      }
+      shareReport(`${title} - 처음 온 사람 인증사진(${firstTimerPhotos.length}장)`, firstText, firstTimerPhotos, firstTimerPhotos);
+    };
+    if (shareFirstBtn) shareFirstBtn.onclick = doShareFirstPhotos;
+    if ($('#btn-card-share-first')) $('#btn-card-share-first').onclick = doShareFirstPhotos;
+    if ($('#btn-card-dl-first')) $('#btn-card-dl-first').onclick = () => downloadFiles(firstTimerPhotos);
 
     $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
