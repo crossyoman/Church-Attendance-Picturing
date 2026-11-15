@@ -227,3 +227,42 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
 .hist-card-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; }
 .hist-card .hist-th .thumbs { display: block; margin: 0; }
 .hist-card .hist-th figure img { width: 100%; height: auto; aspect-ratio: auto; object-fit: contain; border-radius: 10px; background: #0f172a; max-height: 520px; }
+
+/* 클릭 가능한 형제 이름 버튼 */
+.member-link { background: none; border: 0; padding: .15em .35em; margin: -.15em -.35em; border-radius: 6px; font: inherit; font-weight: 800; color: #1e3a8a; cursor: pointer; text-decoration: underline; text-underline-offset: 3px; text-decoration-color: #93c5fd; transition: background .15s; text-align: left; }
+.member-link:hover { background: #dbeafe; color: #1d4ed8; }
+
+/* 주간 리포트 6개 액션 버튼 (메일발송 + 기기 내 보기 짝꿍) */
+.report-action-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .55rem; margin-bottom: .7rem; }
+.report-action-grid .btn { justify-content: center; text-align: center; padding: .72em .8em; font-weight: 700; white-space: normal; line-height: 1.3; }
+@media (max-width: 560px) {
+  .report-action-grid { gap: .42rem; }
+  .report-action-grid .btn { font-size: .82rem; padding: .62em .45em; }
+}
+
+/* 개인 출석 기록(24회 구간별 + 사진/날짜 혼합) 모달 */
+.stage-tabs { display: flex; flex-wrap: wrap; gap: .4rem; margin: .6rem 0; }
+.stage-tab { border: 1.5px solid #cbd5e1; background: #f8fafc; color: #334155; padding: .42em .85em; border-radius: 999px; font-weight: 700; font-size: .84rem; cursor: pointer; }
+.stage-tab.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.hist-summary-box { background: #f8fafc; border: 1.5px solid #cbd5e1; border-radius: 12px; padding: .85rem 1rem; margin-bottom: .8rem; }
+.hist-date-pills { display: grid; grid-template-columns: repeat(auto-fill, minmax(168px, 1fr)); gap: .4rem; margin: .5rem 0 .85rem; }
+.hist-date-only { display: flex; align-items: center; justify-content: space-between; gap: .35rem; padding: .42rem .6rem; border-radius: 8px; background: #f1f5f9; border: 1px solid #cbd5e1; font-size: .83rem; }
+.hist-date-only.unknown { background: #fef2f2; border-color: #fecaca; color: #991b1b; }
+.hist-date-only.manual { background: #eff6ff; border-color: #bfdbfe; }
+.hist-date-only .ord { font-weight: 800; color: var(--navy); white-space: nowrap; }
+.hist-date-only .dt { font-weight: 600; color: #1e293b; flex: 1; }
+.hist-photo-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: .75rem; margin: .5rem 0 .9rem; }
+.hist-photo-item { border: 1.5px solid #93c5fd; border-radius: 12px; overflow: hidden; background: #fff; box-shadow: 0 2px 8px rgba(30,58,138,.08); display: flex; flex-direction: column; }
+.hist-photo-item img { width: 100%; aspect-ratio: 4/3; object-fit: cover; background: #0f172a; cursor: zoom-in; display: block; }
+.hist-photo-item .meta { padding: .5rem .65rem; display: flex; align-items: center; justify-content: space-between; gap: .4rem; font-size: .8rem; background: #eff6ff; }
+.hist-photo-item .meta b { color: #1e3a8a; }
+
+/* 엑셀 보기 모달 시트 탭 & 테이블 */
+.excel-sheet-tabs { display: flex; flex-wrap: wrap; gap: .35rem; margin-bottom: .7rem; border-bottom: 1.5px solid #e2e8f0; padding-bottom: .55rem; }
+.excel-sheet-tab { border: 1px solid #cbd5e1; background: #f8fafc; color: #334155; padding: .38em .75em; border-radius: 8px; font-weight: 700; font-size: .8rem; cursor: pointer; }
+.excel-sheet-tab.on { background: #1e3a8a; border-color: #1e3a8a; color: #fff; }
+.excel-viewer-wrap { max-height: 60vh; overflow: auto; border: 1px solid #cbd5e1; border-radius: 10px; background: #fff; }
+.excel-viewer-tbl { width: 100%; border-collapse: collapse; font-size: .82rem; }
+.excel-viewer-tbl th, .excel-viewer-tbl td { border: 1px solid #e2e8f0; padding: .42rem .55rem; text-align: center; white-space: nowrap; }
+.excel-viewer-tbl thead th { background: #eef2f7; color: #1e293b; font-weight: 700; position: sticky; top: 0; z-index: 1; }
+.excel-viewer-tbl tr.total td { font-weight: 800; background: #f8fafc; }

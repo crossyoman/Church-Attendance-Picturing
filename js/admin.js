@@ -136,19 +136,20 @@ const Admin = {
           ※ ‘기준’에서 <b>지금 시점</b>이나 <b>최근 주일</b>을 순서대로 고르시거나, 우측 달력에서 <b>몇 월 며칠부터 몇 월 며칠까지</b>를 직접 선택하실 수 있습니다. (종료일 선택 시 기본 1주일로 자동 세팅)
         </p>
       </div>
-      <div class="toolbar" style="gap:.5rem">
-        <button class="btn primary" id="share-excel" style="font-weight:700">📧 1) 출석·통계 엑셀 메일 보내기</button>
-        <button class="btn primary" id="share-ach-photos" style="font-weight:700;background:#1e3a8a">📸 2) 24회 달성자 사진 메일 보내기</button>
-        <button class="btn primary" id="share-first-photos" style="font-weight:700;background:var(--green)">🌱 3) 처음 온 사람 사진 메일 보내기</button>
-        <button class="btn ghost small" id="dl-week-xl">📊 엑셀(.xlsx) 다운로드</button>
+      <div class="report-action-grid">
+        <button class="btn primary" id="share-excel">📧 출석통계 엑셀 메일발송</button>
+        <button class="btn ghost" id="view-excel" style="border-color:#1e3a8a;color:#1e3a8a">📊 출석통계 엑셀 보기</button>
+        <button class="btn primary" id="share-ach-photos" style="background:#1e3a8a">📸 24회 달성자 사진 메일발송</button>
+        <button class="btn ghost" id="view-ach-photos" style="border-color:#1e3a8a;color:#1e3a8a">🔍 24회 달성자 사진 보기</button>
+        <button class="btn primary" id="share-first-photos" style="background:var(--green)">🌱 새신자 사진 메일 발송</button>
+        <button class="btn ghost" id="view-first-photos" style="border-color:var(--green);color:var(--green)">🔍 새신자 사진 보기</button>
+      </div>
+      <div class="toolbar" style="gap:.5rem;margin-bottom:.6rem">
+        <button class="btn ghost small" id="dl-week-xl">💾 엑셀(.xlsx) 다운로드</button>
         <button class="btn ghost small" id="copy">📋 본문 복사</button>
       </div>
       <div class="note" style="line-height:1.6">
-        💡 <b>리포트 메일 발송 안내 (안드로이드 Gmail 첨부 호환)</b>:<br>
-        스마트폰(안드로이드)에서 엑셀 파일과 사진(JPG)을 한 번에 섞어 보내면 Gmail 앱이 제목·본문·첨부를 빈칸으로 비워버리는 현상이 있어, <b>100% 누락 없이 첨부되도록 용도별 버튼으로 분리</b>했습니다.<br>
-        ① <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b>: 메일 제목·본문(처음 온 사람 명단 포함) + <b>주간 출석명단·부대통계·마일리지 엑셀 파일</b>이 Gmail에 즉시 세팅됩니다.<br>
-        ② <b>‘📸 2) 24회 달성자 사진 메일 보내기’</b>: 24회 달성자의 <b>최근 24회 인증 사진들</b>이 Gmail에 즉시 첨부됩니다.<br>
-        ③ <b>‘🌱 3) 처음 온 사람 사진 메일 보내기’</b>: 이번 기간에 <b>처음 온 신규 출석자들의 명단과 인증 사진들</b>을 따로 모아서 Gmail로 바로 발송합니다.
+        💡 <b>리포트 메일 발송 및 바로 보기 안내</b>: 각 항목의 <b>메일발송</b> 버튼 바로 옆 <b>보기</b> 버튼을 누르면 이 기기 화면에서 엑셀표·24회 달성자·새신자 사진을 바로 확인하고, 형제 이름을 누르면 해당 형제의 <b>24회차 출석 이력(사진+날짜)</b>을 바로 검증할 수 있습니다.
       </div>
       <div id="rep"><p class="muted">계산 중…</p></div>`;
 
@@ -223,7 +224,7 @@ const Admin = {
                     <td>${idx + 1}</td>
                     <td>${a.date}(${weekdayOf(a.date)}) ${a.time}</td>
                     <td>${esc(a.label)}</td>
-                    <td><b>${esc(a.memberName)}</b> <span class="badge" style="background:var(--green)">🌱 첫출석</span></td>
+                    <td>${this.memberLink(a.person?.id, a.memberName)} <span class="badge" style="background:var(--green)">🌱 첫출석</span></td>
                     <td>${fmtYYMMDD(a.dischargeDate)}</td>
                     <td>${a.manual ? `<span class="badge">수동</span> ${esc(a.reason || '')}` : '📸 사진인증'}</td>
                   </tr>
@@ -233,8 +234,8 @@ const Admin = {
           </div>
           <div class="thumbs" id="first-timer-thumbs" style="margin-top:.7rem"><p class="muted">처음 온 사람 사진 불러오는 중…</p></div>
           <div class="row" style="margin-top:.6rem">
-            <button class="btn small primary" style="background:var(--green);font-weight:700" id="btn-card-share-first">🌱 처음 온 사람 사진 메일 발송 (${firstTimers.filter(a => a.hasPhoto).length}장)</button>
-            <button class="btn small ghost" id="btn-card-dl-first">💾 처음 온 사람 사진(${firstTimers.filter(a => a.hasPhoto).length}장) 저장</button>
+            <button class="btn small primary" style="background:var(--green);font-weight:700" id="btn-card-share-first">🌱 새신자 사진 메일 발송 (${firstTimers.filter(a => a.hasPhoto).length}장)</button>
+            <button class="btn small ghost" id="btn-card-dl-first">💾 새신자 사진(${firstTimers.filter(a => a.hasPhoto).length}장) 저장</button>
           </div>
         </div>
       ` : '<p class="muted">이 기간에 처음 온 신규 출석자가 없습니다.</p>'}
@@ -251,7 +252,7 @@ const Admin = {
                     <td>${idx + 1}</td>
                     <td>${a.date}(${weekdayOf(a.date)}) ${a.time}</td>
                     <td>${esc(a.label)}</td>
-                    <td><b>${esc(a.memberName)}</b>${a.isFirstVisit ? ' <span class="badge" style="background:var(--green)">🌱 첫출석</span>' : ''}</td>
+                    <td>${this.memberLink(a.person?.id, a.memberName)}${a.isFirstVisit ? ' <span class="badge" style="background:var(--green)">🌱 첫출석</span>' : ''}</td>
                     <td>${fmtYYMMDD(a.dischargeDate)}</td>
                     <td><b>${a.cumCount}회</b></td>
                     <td>${a.manual ? `<span class="badge">수동</span> ${esc(a.reason || '')}` : '📸 사진인증'}</td>
@@ -276,7 +277,7 @@ const Admin = {
                     <tr>
                       <td>${idx + 1}</td>
                       <td>${esc(d.label)}</td>
-                      <td><b>${esc(d.name)}</b> <span class="badge gray">전역</span></td>
+                      <td>${this.memberLink(d.person?.id, d.name)} <span class="badge gray">전역</span></td>
                       <td>${fmtYYMMDD(d.dischargeDate)}</td>
                       <td><b>${d.total}회</b></td>
                     </tr>
@@ -295,7 +296,7 @@ const Admin = {
                     <tr>
                       <td>${idx + 1}</td>
                       <td>${esc(d.label)}</td>
-                      <td><b>${esc(d.name)}</b></td>
+                      <td>${this.memberLink(d.person?.id, d.name)}</td>
                       <td>${fmtYYMMDD(d.dischargeDate)}</td>
                       <td><b>${d.total}회</b></td>
                     </tr>
@@ -310,11 +311,11 @@ const Admin = {
       <h3>🎖 ${CONFIG.mileageUnit}회 단위 마일리지 달성자 (${r.achievers.length}건)</h3>
       ${r.achievers.length ? r.achievers.map((a, i) => `
         <div class="card ach">
-          <div class="ach-head"><b>${esc(unitLabel(a.person))} ${esc(a.person.name)}</b>
+          <div class="ach-head">${esc(unitLabel(a.person))} ${this.memberLink(a.person?.id, a.person.name, Math.round(a.milestone / CONFIG.mileageUnit))}
             <span class="badge">${a.milestone}회째 달성</span>${a.person.discharged ? '<span class="badge gray">전역</span>' : ''}</div>
           <div class="ach-meta">현재 누적 ${a.total}회 · 지급 완료 ${a.grantedBlocks}회 · 지급 대상 ${a.earnedBlocks}회 ·
             <b class="${a.pendingBlocks ? 'red' : ''}">미지급 ${a.pendingBlocks}회</b> · 전역 ${fmtYYMMDD(a.person.dischargeDate)}
-            ${a.missing ? `<br>※ 사진촬영 전 수기 출석 ${a.missing}회 포함` : ''}</div>
+            ${a.missing ? `<br>※ 사진촬영 전/수기 출석 ${a.missing}회 포함` : ''}</div>
           ${a.blockDates && a.blockDates.length ? `
             <div style="margin:.6rem 0;background:#fff;border:1.5px solid #cbd5e1;border-radius:8px;padding:.6rem .8rem">
               <div style="font-weight:700;color:var(--navy);font-size:.85rem;margin-bottom:.35rem">
@@ -339,36 +340,118 @@ const Admin = {
             <div class="chips">${a.allDates.map((d, idx) => `<span>${idx + 1}회 ${esc(d)}</span>`).join('')}</div></details>
           <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
-            <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송 (최근 24회 사진)</button>
+            <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 발송</button>
             <button class="btn small primary" style="background:var(--green)" data-ach-grant="${a.person.id}">🎖 건의일 입력/조치 (언제부·언제 건의)</button>
-            <button class="btn small ghost" data-dl="${i}">💾 이 형제 24회 사진(${a.block.filter(b => b.hasPhoto).length}장) 저장</button>
+            <button class="btn small ghost" data-dl="${i}">💾 증빙시트·사진(${a.block.filter(b => b.hasPhoto).length}장) 저장</button>
           </div>
         </div>`).join('') : '<p class="muted">이 기간에 24회 단위를 새로 달성한 형제가 없습니다.</p>'}
 
       <details><summary>메일 본문 미리보기</summary><pre class="pre">${esc(text)}</pre></details>`;
 
-    if ($('#first-timer-thumbs')) {
-      await this.fillThumbs($('#first-timer-thumbs'), firstTimers);
-    }
-    for (const el of $$('.ach-thumbs', $('#rep'))) {
-      await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
-    }
+    // 형제 이름 클릭 시 해당 회차(24회 단위) 출석 이력 모달 바로 열기 + 모든 버튼 즉시 바인딩
+    this.bindMemberHistoryLinks($('#rep'));
 
-    // 마일리지 달성자별 사진 및 처음 온 사람 사진 미리 로드 (클릭 즉시 공유창이 뜨도록 사용자 제스처 보존)
-    const [achieverPhotoListByIdx, firstTimerPhotos] = await Promise.all([
-      Promise.all(r.achievers.map(a => photoFiles(a.block || []))),
+    const csvExcelFile = Report.buildWeeklyCsvFile(r);
+    let xlFileCache = null;
+    const xlPromise = Report.buildWeeklyExcelFile(r).then(f => { xlFileCache = f; return f; });
+
+    let achAssetsCache = null;
+    let firstPhotosCache = null;
+    const assetsPromise = Promise.all([
+      Promise.all(r.achievers.map(a => this.buildBrotherBlockAssets(a.person, Math.round(a.milestone / CONFIG.mileageUnit)))),
       photoFiles(firstTimers),
-    ]);
-    const allAchieverPhotos = achieverPhotoListByIdx.flat();
+    ]).then(([achRes, firstRes]) => {
+      achAssetsCache = achRes;
+      firstPhotosCache = firstRes;
+      return { achRes, firstRes };
+    });
 
-    $$('[data-share]').forEach(b => b.onclick = () => {
+    const getExcelShareTarget = xl => {
+      let target = [csvExcelFile].filter(Boolean);
+      if (xl && typeof navigator.canShare === 'function') {
+        try { if (navigator.canShare({ files: [xl] })) target = [xl]; } catch (e) {}
+      }
+      return target;
+    };
+
+    $('#dl-week-xl').onclick = async () => {
+      const xl = xlFileCache || await xlPromise;
+      if (!xl) return Modal.alert('엑셀 생성 도구를 불러오지 못했습니다.');
+      downloadBlob(xl, xl.name);
+    };
+
+    $('#share-excel').onclick = async () => {
+      const xl = xlFileCache || await xlPromise;
+      shareReport(title, text, getExcelShareTarget(xl), xl ? [xl] : [csvExcelFile]);
+    };
+
+    $('#view-excel').onclick = () => this.viewWeeklyExcelModal(r, xlFileCache || xlPromise, title, text);
+
+    $('#share-ach-photos').onclick = async () => {
+      if (!r.achievers.length) {
+        return Modal.alert('선택한 기간에 24회 마일리지를 새로 달성한 형제가 없습니다.<br>(출석 명단과 통계는 <b>‘📧 출석통계 엑셀 메일발송’</b> 버튼을 눌러 보내실 수 있습니다.)');
+      }
+      const { achRes } = achAssetsCache ? { achRes: achAssetsCache } : await assetsPromise;
+      const sheetFiles = achRes.map(x => x.sheetFile).filter(Boolean);
+      const allFiles = achRes.flatMap(x => [x.sheetFile, ...x.indivFiles]).filter(Boolean);
+      if (!allFiles.length) return Modal.alert('첨부할 달성자 증빙 파일을 생성하지 못했습니다.');
+      const achText = Report.achieversOnlyText(r);
+      const totalPhotoCnt = achRes.reduce((s, x) => s + x.indivFiles.length, 0);
+      shareReport(
+        `${title} - 24회 달성자(${r.achievers.length}명·사진${totalPhotoCnt}장)`,
+        achText,
+        allFiles,
+        sheetFiles.length ? sheetFiles : allFiles
+      );
+    };
+
+    $('#view-ach-photos').onclick = () => this.viewAchieverPhotosModal(r, title);
+
+    const doShareFirstPhotos = async () => {
+      if (!firstTimers.length) {
+        return Modal.alert('선택한 기간에 처음 온 신규 출석자가 없습니다.');
+      }
+      const { firstRes } = firstPhotosCache ? { firstRes: firstPhotosCache } : await assetsPromise;
+      const itemsWithBlob = await Promise.all(firstTimers.map(async a => ({
+        line1: `[${a.label}] ${a.memberName} (전역 ${fmtYYMMDD(a.dischargeDate) || '미입력'})`,
+        line2: `${a.date}(${weekdayOf(a.date)}) ${a.time} 첫 출석 · ${a.manual ? '수동입력' : '사진인증'}`,
+        blob: a.hasPhoto ? await Store.getPhoto(a.id) : null,
+      })));
+      const sheetFile = await buildMultiPhotoSheetFile(`${CONFIG.churchName} 새신자 출석 인증 (${firstTimers.length}명)`, itemsWithBlob);
+      const shareList = [sheetFile, ...firstRes].filter(Boolean);
+      const dlList = sheetFile ? [sheetFile] : firstRes;
+      if (!shareList.length) return Modal.alert('첨부할 새신자 사진 또는 증빙 시트를 생성하지 못했습니다.');
+      shareReport(`${title} - 새신자(${firstTimers.length}명·사진${firstRes.length}장)`, firstText, shareList, dlList);
+    };
+
+    const shareFirstBtn = $('#share-first-photos');
+    if (shareFirstBtn) shareFirstBtn.onclick = doShareFirstPhotos;
+    if ($('#btn-card-share-first')) $('#btn-card-share-first').onclick = doShareFirstPhotos;
+    if ($('#view-first-photos')) $('#view-first-photos').onclick = () => this.viewFirstTimerPhotosModal(r, title, firstText);
+    if ($('#btn-card-dl-first')) $('#btn-card-dl-first').onclick = async () => {
+      const { firstRes } = firstPhotosCache ? { firstRes: firstPhotosCache } : await assetsPromise;
+      if (!firstRes.length) return Modal.alert('저장할 새신자 사진 파일이 없습니다.');
+      downloadFiles(firstRes);
+    };
+
+    $$('[data-share]').forEach(b => b.onclick = async () => {
       const idx = +b.dataset.share;
       const a = r.achievers[idx];
-      const one = { ...r, achievers: [a] };
-      const pFiles = achieverPhotoListByIdx[idx] || [];
-      shareReport(`${title} - ${a.person.name}(${a.milestone}회 달성)`, Report.text(one), pFiles, pFiles);
+      if (!a) return;
+      const stage = Math.round(a.milestone / CONFIG.mileageUnit);
+      await this.shareSingleBrother(a.person, stage, r);
     });
-    $$('[data-dl]').forEach(b => b.onclick = () => downloadFiles(achieverPhotoListByIdx[+b.dataset.dl] || []));
+
+    $$('[data-dl]').forEach(b => b.onclick = async () => {
+      const idx = +b.dataset.dl;
+      const { achRes } = achAssetsCache ? { achRes: achAssetsCache } : await assetsPromise;
+      const asset = achRes[idx];
+      if (!asset) return;
+      const list = [asset.sheetFile, ...asset.indivFiles].filter(Boolean);
+      if (!list.length) return Modal.alert('저장할 사진이 없습니다.');
+      downloadFiles(list);
+    });
+
     $$('[data-ach-grant]').forEach(b => b.onclick = async () => {
       const mId = b.dataset.achGrant;
       const m = await Store.memberWithStats(mId);
@@ -378,61 +461,27 @@ const Admin = {
       this.openMileageModal({ m, slots });
     });
 
-    const csvExcelFile = Report.buildWeeklyCsvFile(r);
-    const xlFileReady = await Report.buildWeeklyExcelFile(r);
-
-    $('#dl-week-xl').onclick = () => {
-      if (!xlFileReady) return Modal.alert('엑셀 생성 도구를 불러오지 못했습니다.');
-      downloadBlob(xlFileReady, xlFileReady.name);
+    $('#copy').onclick = async () => {
+      if (await copyReportText(text)) Modal.alert('본문을 복사했어요.');
+      else Modal.alert('복사에 실패했어요.');
     };
 
-    // 1) 출석·통계 엑셀 파일 단독 공유 (동일 타입 단일 파일이므로 Gmail에서 제목·본문·첨부가 100% 정상 세팅됨)
-    let excelShareTarget = [csvExcelFile].filter(Boolean);
-    if (xlFileReady && typeof navigator.canShare === 'function') {
-      try {
-        if (navigator.canShare({ files: [xlFileReady] })) {
-          excelShareTarget = [xlFileReady];
-        }
-      } catch (e) {}
+    // 썸네일 및 비동기 버튼 카운트 업데이트 (사용자 클릭을 블로킹하지 않음)
+    if ($('#first-timer-thumbs')) {
+      await this.fillThumbs($('#first-timer-thumbs'), firstTimers);
     }
-
+    for (const el of $$('.ach-thumbs', $('#rep'))) {
+      await this.fillThumbs(el, r.achievers[+el.dataset.i].block);
+    }
+    const { achRes, firstRes } = await assetsPromise;
+    const totalAchPhotos = achRes.reduce((s, x) => s + x.indivFiles.length, 0);
     const shareAchBtn = $('#share-ach-photos');
     if (shareAchBtn) {
-      shareAchBtn.textContent = `📸 2) 24회 달성자 사진 메일 보내기 (${allAchieverPhotos.length}장)`;
+      shareAchBtn.textContent = `📸 24회 달성자 사진 메일발송 (${r.achievers.length}명·${totalAchPhotos}장)`;
     }
-    const shareFirstBtn = $('#share-first-photos');
     if (shareFirstBtn) {
-      shareFirstBtn.textContent = `🌱 3) 처음 온 사람 사진 메일 보내기 (${firstTimerPhotos.length}장)`;
+      shareFirstBtn.textContent = `🌱 새신자 사진 메일 발송 (${firstTimers.length}명·${firstRes.length}장)`;
     }
-
-    $('#share-excel').onclick = () => {
-      shareReport(title, text, excelShareTarget, xlFileReady ? [xlFileReady] : [csvExcelFile]);
-    };
-
-    $('#share-ach-photos').onclick = () => {
-      if (!r.achievers.length) {
-        return Modal.alert('선택한 기간에 24회 마일리지를 새로 달성한 형제가 없습니다.<br>(출석 명단과 통계는 <b>‘📧 1) 출석·통계 엑셀 메일 보내기’</b> 버튼을 눌러 보내실 수 있습니다.)');
-      }
-      if (!allAchieverPhotos.length) {
-        return Modal.alert('달성자의 사진 인증 기록이 없습니다.');
-      }
-      shareReport(`${title} - 24회 달성자 인증사진(${allAchieverPhotos.length}장)`, text, allAchieverPhotos, allAchieverPhotos);
-    };
-
-    const doShareFirstPhotos = () => {
-      if (!firstTimers.length) {
-        return Modal.alert('선택한 기간에 처음 온 신규 출석자가 없습니다.');
-      }
-      if (!firstTimerPhotos.length) {
-        return Modal.alert('처음 온 사람의 사진 인증 기록이 없습니다.');
-      }
-      shareReport(`${title} - 처음 온 사람 인증사진(${firstTimerPhotos.length}장)`, firstText, firstTimerPhotos, firstTimerPhotos);
-    };
-    if (shareFirstBtn) shareFirstBtn.onclick = doShareFirstPhotos;
-    if ($('#btn-card-share-first')) $('#btn-card-share-first').onclick = doShareFirstPhotos;
-    if ($('#btn-card-dl-first')) $('#btn-card-dl-first').onclick = () => downloadFiles(firstTimerPhotos);
-
-    $('#copy').onclick = async () => { try { await navigator.clipboard.writeText(text); Modal.alert('본문을 복사했어요.'); } catch (e) { Modal.alert('복사에 실패했어요.'); } };
   },
 
   /* ===================== 📸 오늘의 출석자 (선택한 날짜의 예배 참석자 전체 사진을 한눈에 확인) ===================== */
@@ -538,7 +587,7 @@ const Admin = {
               <div class="hist-card-head">
                 <div>
                   <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
-                  <b style="font-size:1.05rem">${esc(a.label)} ${esc(a.memberName)}</b>
+                  <b style="font-size:1.05rem">${esc(a.label)} ${this.memberLink(a.person?.id, a.memberName)}</b>
                   <div class="muted" style="font-size:.82rem;margin-top:.2rem">
                     ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
                     ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
@@ -551,6 +600,7 @@ const Admin = {
           `).join('')}
         </div>`;
 
+      this.bindMemberHistoryLinks($('#td-gallery'));
       for (const card of $$('.td-att-card', $('#td-gallery'))) {
         const a = filtered.find(x => x.id === card.dataset.id);
         if (a) await this.fillThumbs($('.hist-th', card), [a]);
@@ -598,7 +648,7 @@ const Admin = {
     body.innerHTML = `<div class="note">같은 날 같은 부대·같은 이름으로 출석이 2건 이상 기록되거나, 이미 출석한 형제가 다시 출석/등록을 시도하면 여기에 남습니다.</div>
       ${list.length ? list.map((w, i) => `
         <div class="card warn-card ${w.resolved ? 'resolved' : ''}">
-          <div class="ach-head"><b>[경고-확인필요] ${esc(w.unitLabel)} ${esc(w.name)}</b> <span class="badge">${w.date}</span>
+          <div class="ach-head"><b>[경고-확인필요] ${esc(w.unitLabel)} <button type="button" class="member-link" data-mem-hist="${esc(w.memberId || '')}" data-mem-name="${esc(w.name)}" data-mem-unit="${esc(w.unitLabel)}">${esc(w.name)}</button></b> <span class="badge">${w.date}</span>
             ${w.resolved ? '<span class="badge gray">확인 완료</span>' : '<span class="badge" style="background:var(--red)">미확인</span>'}</div>
           <div class="ach-meta">${esc(w.detail)}<br><span class="muted">발생: ${new Date(w.createdAt).toLocaleString('ko-KR')}</span>
             ${w.resolved ? `<br><b>특이사항 메모:</b> ${esc(w.memo || '이상없음')}` : ''}</div>
@@ -608,6 +658,7 @@ const Admin = {
             ${w.resolved ? `<button class="btn small ghost" data-wok="${i}">✏️ 메모 수정</button>` : `<button class="btn small primary" data-wok="${i}">✔ 확인 완료 처리</button>`}
           </div>
         </div>`).join('') : '<p class="muted">경고가 없습니다. 👍</p>'}`;
+    this.bindMemberHistoryLinks(body);
     const attsOf = async w => (await Promise.all((w.attendanceIds || []).map(id => Store.attendanceById(id)))).filter(Boolean);
     for (const el of $$('.thumbs', body)) {
       const atts = await attsOf(list[+el.dataset.i]);
@@ -697,7 +748,7 @@ const Admin = {
                 <tr>
                   <td style="text-align:center"><input type="checkbox" class="chk-mem" data-id="${m.id}" ${this.selectedMemberIds.has(String(m.id)) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></td>
                   <td>${esc(unitLabel(m))}</td>
-                  <td><b>${esc(m.name)}</b>${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
+                  <td>${this.memberLink(m.id, m.name)}${Store.isLongAbsent(m) ? ' <span class="badge gray">3개월+</span>' : ''}</td>
                   <td>${m.dischargeDate}</td>
                   <td>${m.total}</td>
                   <td>${m.last || '-'}</td>
@@ -710,6 +761,8 @@ const Admin = {
             </tbody>
           </table>
         </div>`;
+
+      this.bindMemberHistoryLinks($('#list'));
 
       const chkAll = $('#chk-all');
       if (chkAll) {
@@ -871,45 +924,488 @@ const Admin = {
     return blocksHtml.join('');
   },
 
-  /** 출석 기록 보기 (readOnly: 전역자) - 과거 타임라인(1~N회) + 시스템 인증 사진 전체 한눈에 보기 */
-  async history(m, readOnly = false) {
-    const atts = (m.atts || []).slice().sort((a, b) => b.ts - a.ts);
-    const tl = Store.timeline(m);
-    const gridsHtml = this.renderBlockGridsHtml(tl, true);
-    const chipsHtml = tl.length
-      ? tl.map((e, idx) => `<span style="${e.unknown ? 'background:#fee2e2;color:#b91c1c' : (e.att ? 'background:#dbeafe;color:#1e3a8a;font-weight:700' : '')}">${idx + 1}회 ${e.unknown ? '00.00.00' : `${fmtYYMMDD(e.date)}(${weekdayOf(e.date)})`}</span>`).join('')
-      : '<p class="muted">누적 출석 날짜가 없습니다.</p>';
+  /** 형제 이름 클릭 버튼 HTML (목사님 관리 메뉴 어디서든 해당 형제 24회차 출석 이력 바로 열기) */
+  memberLink(id, label, stageOpt = null) {
+    return `<button type="button" class="member-link" data-mem-hist="${esc(id || '')}"${stageOpt ? ` data-stage="${stageOpt}"` : ''}>${esc(label)}</button>`;
+  },
 
-    const w = Modal.open(`<h3>${esc(unitLabel(m))} ${esc(m.name)} · 출석 기록 전체보기</h3>
-      <p class="modal-msg small">누적 <b>${m.total}회</b> (사진촬영 전 ${m.baseCount || 0}회 + 시스템 기록 ${atts.length}회) · 전역일 ${fmtYYMMDD(m.dischargeDate)}</p>
-      ${gridsHtml ? `
-        <details open style="margin-bottom:.8rem">
-          <summary style="cursor:pointer;font-weight:700;color:var(--navy);font-size:.9rem">📅 24회 단위 회기별 출석 날짜표 (1회~${tl.length}회)</summary>
-          <div style="margin-top:.4rem">${gridsHtml}</div>
-        </details>` : ''}
-      <details style="margin-bottom:.9rem">
-        <summary style="cursor:pointer;font-weight:700;color:#334155;font-size:.88rem">📋 전체 출석일자 타임라인 (${tl.length}회 · 파란색=시스템 기록)</summary>
-        <div class="chips" style="margin-top:.4rem">${chipsHtml}</div>
-      </details>
-      <h4 style="margin:.4rem 0;color:var(--navy);font-size:.9rem">📸 시스템 사진·수동 인증 기록 (${atts.length}건)</h4>
-      <div class="hist-grid">${atts.map(a => `<div class="hist-card hist-row" data-id="${a.id}">
-        <div class="hist-card-head">
-          <div class="hist-info"><b>${a.date} (${weekdayOf(a.date)}) ${a.time}</b>${a.manual ? ` <span class="badge">수동</span> <span class="muted">${esc(a.reason)}</span>` : ''}</div>
-          ${readOnly ? '' : `<button class="btn small danger" data-del="${a.id}">삭제</button>`}
-        </div>
-        <div class="hist-th"></div>
-      </div>`).join('') || '<p class="muted">시스템 도입 이후 사진/수동 인증 출석 기록이 없습니다.</p>'}</div>
-      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'xwide');
-    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
-    for (const row of $$('.hist-row', w)) {
-      const a = atts.find(x => x.id === row.dataset.id);
-      await this.fillThumbs($('.hist-th', row), [a]);
+  /** 컨테이너 내 모든 형제 이름 링크 클릭 이벤트 연결 */
+  bindMemberHistoryLinks(container = document) {
+    $$('[data-mem-hist]', container).forEach(b => {
+      b.onclick = () => this.openPersonHistoryById(
+        b.dataset.memHist,
+        b.dataset.stage ? +b.dataset.stage : null,
+        { name: b.dataset.memName, unitLabel: b.dataset.memUnit }
+      );
+    });
+  },
+
+  /** ID(또는 부대+이름)로 형제 조회 후 출석 이력 모달 열기 */
+  async openPersonHistoryById(id, stageOpt = null, fallback = null) {
+    const all = await Store.allPeopleFull();
+    let person = id ? all.find(p => String(p.id) === String(id)) : null;
+    if (!person && fallback && fallback.name) {
+      person = all.find(p => p.name === fallback.name && (!fallback.unitLabel || unitLabel(p) === fallback.unitLabel));
     }
+    if (!person) return Modal.alert('해당 형제의 기록을 찾을 수 없습니다.');
+    await this.history(person, !!person.discharged, stageOpt);
+  },
+
+  /** 특정 형제의 특정 24회차 블록에 대한 요약, 사진 목록, 개별 .jpg 및 통합 증빙 시트 .jpg 생성 */
+  async buildBrotherBlockAssets(m, stageOpt = null) {
+    if (m.grants === undefined) {
+      const fresh = (await Store.allPeopleFull()).find(p => String(p.id) === String(m.id));
+      if (fresh) m = fresh;
+    }
+    const summary = Report.achieverBlockSummary(m, stageOpt);
+    const entries = summary.slice;
+    const blobs = await Promise.all(
+      entries.map(e => (e.att && e.att.hasPhoto) ? Store.getPhoto(e.att.id) : Promise.resolve(null))
+    );
+    const blobByAttId = {};
+    const urlByAttId = {};
+    const photoItems = [];
+    const indivFiles = [];
+    entries.forEach((e, idx) => {
+      const blob = blobs[idx];
+      if (e.att && blob) {
+        blobByAttId[e.att.id] = blob;
+        urlByAttId[e.att.id] = this.thumbURL(blob);
+        photoItems.push({ ord: e.ord, date: e.date, time: e.att.time || '', att: e.att, blob });
+        indivFiles.push(new File([blob], safeFileName(e.att.fileName || `${e.date}_${e.att.time || ''}_${m.name}`) + '.jpg', { type: 'image/jpeg' }));
+      }
+    });
+    const sheetFile = await buildVerificationSheetFile({
+      person: m,
+      stage: summary.stage,
+      startOrd: summary.startOrd,
+      endOrd: summary.endOrd,
+      slice: summary.slice,
+      photoItems,
+    });
+    return { person: m, summary, blobByAttId, urlByAttId, photoItems, indivFiles, sheetFile };
+  },
+
+  /** '이 형제만 메일 발송' 공용 핸들러 (리포트 카드 & 개인 이력 모달 공용) */
+  async shareSingleBrother(m, stageOpt = null, rOpt = null) {
+    const { person, summary, indivFiles, sheetFile } = await this.buildBrotherBlockAssets(m, stageOpt);
+    const bodyText = Report.achieverText(rOpt, summary);
+    const allShareFiles = [sheetFile, ...indivFiles].filter(Boolean);
+    const desktopDlFiles = sheetFile ? [sheetFile] : indivFiles;
+    await shareReport(
+      `[${CONFIG.churchName}] ${unitLabel(person)} ${person.name} (${summary.startOrd}~${summary.endOrd}회 출석·마일리지 증빙)`,
+      bodyText,
+      allShareFiles,
+      desktopDlFiles
+    );
+  },
+
+  /**
+   * 24회 블록 내 출석 상세 HTML (시간 순서대로 사진 없음 -> 날짜만 표시, 사진 있음 -> 사진+날짜 카드 표시)
+   */
+  renderMixedBlockTimelineHtml(slice, blobByAttId, urlByAttId, readOnly = false) {
+    if (!slice || !slice.length) return '<p class="muted">이 구간에 기록된 출석이 없습니다.</p>';
+    const chunks = [];
+    let curKind = null;
+    let buf = [];
+    const flush = () => {
+      if (!buf.length) return;
+      if (curKind === 'photo') {
+        chunks.push(`<div class="hist-photo-grid">${buf.join('')}</div>`);
+      } else {
+        chunks.push(`<div class="hist-date-pills">${buf.join('')}</div>`);
+      }
+      buf = [];
+    };
+
+    slice.forEach(e => {
+      const att = e.att;
+      const hasBlob = !!(att && blobByAttId[att.id]);
+      const kind = hasBlob ? 'photo' : 'date';
+      if (curKind !== kind) {
+        flush();
+        curKind = kind;
+      }
+      if (hasBlob) {
+        const url = urlByAttId[att.id];
+        const cap = `${e.ord}회 · ${e.date}(${weekdayOf(e.date)}) ${att.time || ''}`.trim();
+        buf.push(`
+          <div class="hist-photo-item">
+            <img src="${url}" data-zoom-url="${url}" data-zoom-cap="${esc(cap)}" alt="${esc(cap)}">
+            <div class="meta">
+              <div>
+                <b>${e.ord}회 · ${fmtYYMMDD(e.date)}(${weekdayOf(e.date)})</b> ${esc(att.time || '')}
+                ${att.retakes ? `<span class="badge" style="background:#d97706">재촬영 ${att.retakes}</span>` : ''}
+              </div>
+              ${readOnly ? '' : `<button type="button" class="btn small danger" style="padding:.12em .45em;font-size:.72rem" data-del="${att.id}">삭제</button>`}
+            </div>
+          </div>`);
+      } else {
+        const dtStr = e.unknown
+          ? '00.00.00(미상)'
+          : `${fmtYYMMDD(e.date)}(${weekdayOf(e.date)})${att && att.time ? ' ' + att.time : ''}`;
+        const cls = e.unknown ? 'unknown' : (att && att.manual ? 'manual' : '');
+        const extraTag = att && att.manual
+          ? `<span class="badge" title="${esc(att.reason || '')}">수동</span>`
+          : (att && att.hasPhoto ? `<span class="badge gray" title="사진은 촬영 기기에 저장됨">타기기📷</span>` : '');
+        buf.push(`
+          <div class="hist-date-only ${cls}">
+            <span class="ord">${e.ord}회</span>
+            <span class="dt">${esc(dtStr)}</span>
+            ${extraTag}
+            ${(!readOnly && att) ? `<button type="button" class="btn small danger" style="padding:.1em .4em;font-size:.7rem" data-del="${att.id}">삭제</button>` : ''}
+          </div>`);
+      }
+    });
+    flush();
+    return chunks.join('');
+  },
+
+  /** 개인 출석 이력 보기 (누적에 따라 현재 24회차 블록 1~24 / 25~48 / 49~72 / 73~96 / 97~120 기본 표시 + 회차 전환 + 부정행위 확인용 사진+날짜) */
+  async history(m, readOnly = false, initialStage = null) {
+    const assets = await this.buildBrotherBlockAssets(m, initialStage);
+    const { person, summary, blobByAttId, urlByAttId, photoItems, indivFiles, sheetFile } = assets;
+    const { stage, maxStage, startOrd, endOrd, slice, slot } = summary;
+    const U = CONFIG.mileageUnit;
+    const tl = Store.timeline(person);
+
+    const rows = Report.dateGridRows(slice, 10);
+    const gridHtml = slice.length ? `
+      <div style="margin-top:.55rem;background:#fff;border:1px solid #cbd5e1;border-radius:8px;padding:.5rem .7rem">
+        <div style="font-weight:700;color:var(--navy);font-size:.82rem;margin-bottom:.3rem">
+          📅 ${stage}차 (${startOrd}~${endOrd}회) 출석 날짜 (월-일 표 · ${slice.length}/${U}회)
+        </div>
+        <table style="width:100%;font-size:.78rem;border-collapse:collapse;text-align:center">
+          <tbody>
+            ${rows.map((row, ri) => {
+              const st = startOrd + ri * 10;
+              const en = st + row.length - 1;
+              return `<tr style="border-bottom:1px solid #e2e8f0">
+                <th style="padding:.22rem .4rem;background:#f1f5f9;width:72px;white-space:nowrap">${st}~${en}회</th>
+                ${row.map(d => `<td style="padding:.22rem .3rem;font-weight:600;${d === '00-00' ? 'color:#dc2626' : ''}">${d}</td>`).join('')}
+                ${Array.from({ length: 10 - row.length }).map(() => '<td style="background:#f8fafc"></td>').join('')}
+              </tr>`;
+            }).join('')}
+          </tbody>
+        </table>
+      </div>` : '';
+
+    const stageTabsHtml = maxStage > 1 ? `
+      <div class="stage-tabs">
+        ${Array.from({ length: maxStage }, (_, idx) => {
+          const s = idx + 1;
+          const sLo = (s - 1) * U + 1;
+          const sHi = s * U;
+          return `<button type="button" class="stage-tab ${s === stage ? 'on' : ''}" data-hstage="${s}">${s}차 (${sLo}~${sHi}회)</button>`;
+        }).join('')}
+      </div>` : '';
+
+    const statusBadge = slot && slot.proposedDate
+      ? `<span class="badge" style="background:#16a34a">✅ ${stage}차 건의완료 (${fmtYYMMDD(slot.baseDate) || '-'}부 / ${fmtYYMMDD(slot.proposedDate)})</span>`
+      : (person.total >= endOrd
+        ? `<span class="badge" style="background:#dc2626">⚠️ ${stage}차 미건의</span>`
+        : `<span class="badge" style="background:#2563eb">⏳ 진행중 (${person.total}/${endOrd}회)</span>`);
+
+    const timelineHtml = this.renderMixedBlockTimelineHtml(slice, blobByAttId, urlByAttId, readOnly);
+
+    const w = Modal.open(`
+      <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem">
+        <h3 style="margin:0">${esc(unitLabel(person))} ${esc(person.name)} · 출석·마일리지 이력</h3>
+        <div><span class="badge">${stage}차 (${startOrd}~${endOrd}회)</span>${readOnly ? '<span class="badge gray">전역</span>' : ''}</div>
+      </div>
+      ${stageTabsHtml}
+      <div class="hist-summary-box">
+        <div style="display:flex;flex-wrap:wrap;gap:.4rem;align-items:center;justify-content:space-between">
+          <div>
+            누적 <b>${person.total}회</b> (사진촬영 전 ${person.baseCount || 0}회 + 시스템 ${(person.atts || []).length}회) · 전역일 <b>${fmtYYMMDD(person.dischargeDate) || '미입력'}</b>
+          </div>
+          <div>${statusBadge}</div>
+        </div>
+        <div class="muted" style="font-size:.82rem;margin-top:.3rem">
+          이 회기(${startOrd}~${endOrd}회): 총 <b>${slice.length}회</b> (사진 인증 <b style="color:#1e3a8a">${photoItems.length}건</b> · 날짜만/수기 ${slice.length - photoItems.length}건)
+        </div>
+        ${gridHtml}
+        <div class="row" style="margin-top:.6rem">
+          <button type="button" class="btn small primary" id="hist-share-one">📧 이 형제만 메일 발송 (${startOrd}~${endOrd}회)</button>
+          ${readOnly ? '' : `<button type="button" class="btn small primary" style="background:var(--green)" id="hist-grant">🎖 건의일 입력/조치</button>`}
+          <button type="button" class="btn small ghost" id="hist-dl-photos">💾 증빙시트·사진(${photoItems.length}장) 저장</button>
+        </div>
+      </div>
+
+      <h4 style="margin:.4rem 0 .2rem;color:var(--navy);font-size:.92rem">
+        🔍 ${startOrd}~${endOrd}회 출석 상세 (${photoItems.length ? '사진 있는 기록은 사진+날짜, 없는 기록은 날짜만 표시' : '날짜 기록'})
+      </h4>
+      ${timelineHtml}
+
+      ${maxStage > 1 ? `
+        <details style="margin-top:.6rem">
+          <summary>📋 누적 전체 타임라인 (1~${tl.length}회) 한번에 보기</summary>
+          <div class="chips" style="margin-top:.4rem">${tl.map((e, idx) => `<span style="${e.unknown ? 'background:#fee2e2;color:#b91c1c' : (e.att ? 'background:#dbeafe;color:#1e3a8a;font-weight:700' : '')}">${idx + 1}회 ${e.unknown ? '00.00.00' : `${fmtYYMMDD(e.date)}(${weekdayOf(e.date)})`}</span>`).join('')}</div>
+        </details>` : ''}
+      <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'xwide');
+
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+    $$('[data-hstage]', w).forEach(b => b.onclick = () => {
+      const nextStage = +b.dataset.hstage;
+      Modal.close(w);
+      this.history(person, readOnly, nextStage);
+    });
+    $$('img[data-zoom-url]', w).forEach(img => img.onclick = () => this.showPhoto(img.dataset.zoomUrl, img.dataset.zoomCap));
+
+    const shareBtn = $('#hist-share-one', w);
+    if (shareBtn) shareBtn.onclick = () => this.shareSingleBrother(person, stage, null);
+
+    const dlBtn = $('#hist-dl-photos', w);
+    if (dlBtn) dlBtn.onclick = () => {
+      const list = [sheetFile, ...indivFiles].filter(Boolean);
+      if (!list.length) return Modal.alert('저장할 파일이 없습니다.');
+      downloadFiles(list);
+    };
+
+    const grantBtn = $('#hist-grant', w);
+    if (grantBtn) {
+      grantBtn.onclick = async () => {
+        Modal.close(w);
+        const fresh = await Store.memberWithStats(person.id);
+        if (!fresh) return Modal.alert('전역 처리되었거나 찾을 수 없는 형제입니다.');
+        const grants = await Store.grantsOf(person.id);
+        this.openMileageModal({ m: fresh, slots: Store.getMemberSlots(fresh, grants) });
+      };
+    }
+
     $$('[data-del]', w).forEach(b => b.onclick = async () => {
       if (!await Modal.confirm('이 출석 기록(사진 포함)을 삭제할까요?', '삭제')) return;
       await Store.deleteAttendance(b.dataset.del);
-      Modal.close(w); this.render();
+      Modal.close(w);
+      this.render();
+      const fresh = (await Store.allPeopleFull()).find(p => String(p.id) === String(person.id));
+      if (fresh) this.history(fresh, !!fresh.discharged, stage);
     });
+  },
+
+  /** 1) 출석통계 엑셀 기기 내 바로 보기 모달 */
+  async viewWeeklyExcelModal(r, xlPromiseOrFile, title, text) {
+    const sheets = await Report.buildWeeklySheetData(r);
+    let curIdx = 0;
+
+    const renderSheetTable = idx => {
+      const sh = sheets[idx];
+      if (!sh || !sh.aoa.length) return '<p class="muted">표시할 데이터가 없습니다.</p>';
+      const hRows = sh.headerRows || 0;
+      const bodyStart = hRows;
+      const fRows = sh.footerRows || 0;
+
+      const buildRowHtml = (row, rowIdx, isHeader = false, isFooter = false) => {
+        if (sh.name === '전체_마일리지_현황' && isHeader) {
+          if (rowIdx === 0) {
+            return `<tr>
+              <th rowspan="2">상태</th><th rowspan="2">소속부대</th><th rowspan="2">이름</th><th rowspan="2">전역일</th>
+              <th rowspan="2">누적출석</th><th rowspan="2">사진촬영전</th><th rowspan="2">마지막출석일</th>
+              <th colspan="2">24회</th><th colspan="2">48회</th><th colspan="2">72회</th><th colspan="2">96회</th><th colspan="2">120회</th>
+            </tr>`;
+          }
+          return `<tr>${Array.from({ length: 5 }, () => '<th>기준일</th><th>건의일</th>').join('')}</tr>`;
+        }
+        const tag = isHeader ? 'th' : 'td';
+        const dataIdx = rowIdx - bodyStart;
+        const pId = (!isHeader && !isFooter && sh.rowPersonIds) ? sh.rowPersonIds[dataIdx] : '';
+        return `<tr class="${isFooter ? 'total' : ''}">${row.map((val, cIdx) => {
+          const isNameCell = !isHeader && !isFooter && cIdx === sh.nameCol && pId;
+          const cellInner = isNameCell ? this.memberLink(pId, String(val ?? '')) : esc(String(val ?? ''));
+          return `<${tag}>${cellInner}</${tag}>`;
+        }).join('')}</tr>`;
+      };
+
+      const theadHtml = hRows ? `<thead>${sh.aoa.slice(0, hRows).map((row, ri) => buildRowHtml(row, ri, true, false)).join('')}</thead>` : '';
+      const tbodyRows = sh.aoa.slice(bodyStart);
+      const tbodyHtml = `<tbody>${tbodyRows.map((row, bi) => {
+        const absIdx = bodyStart + bi;
+        const isFooter = fRows > 0 && absIdx >= sh.aoa.length - fRows;
+        return buildRowHtml(row, absIdx, false, isFooter);
+      }).join('')}</tbody>`;
+      return `<table class="excel-viewer-tbl">${theadHtml}${tbodyHtml}</table>`;
+    };
+
+    const w = Modal.open(`
+      <h3 style="margin:0 0 .3rem">📊 출석통계 엑셀 보기 (${Report.periodText(r)})</h3>
+      <p class="muted" style="margin:0 0 .6rem;font-size:.82rem">아래 탭을 눌러 7개 시트 전체를 확인하고, 형제 이름을 누르면 24회차 출석 이력을 바로 볼 수 있습니다.</p>
+      <div class="excel-sheet-tabs">
+        ${sheets.map((sh, i) => `<button type="button" class="excel-sheet-tab ${i === 0 ? 'on' : ''}" data-xtab="${i}">${esc(sh.label)}</button>`).join('')}
+      </div>
+      <div class="excel-viewer-wrap" id="excel-viewer-body">${renderSheetTable(0)}</div>
+      <div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap">
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button type="button" class="btn primary small" id="vx-share">📧 출석통계 엑셀 메일발송</button>
+          <button type="button" class="btn ghost small" id="vx-dl">💾 엑셀(.xlsx) 다운로드</button>
+        </div>
+        <button type="button" class="btn primary" data-ok>닫기</button>
+      </div>`, 'xwide');
+
+    const drawTab = idx => {
+      curIdx = idx;
+      $$('[data-xtab]', w).forEach(b => b.classList.toggle('on', +b.dataset.xtab === idx));
+      $('#excel-viewer-body', w).innerHTML = renderSheetTable(idx);
+      this.bindMemberHistoryLinks($('#excel-viewer-body', w));
+    };
+
+    $$('[data-xtab]', w).forEach(b => b.onclick = () => drawTab(+b.dataset.xtab));
+    this.bindMemberHistoryLinks($('#excel-viewer-body', w));
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+    $('#vx-dl', w).onclick = async () => {
+      const xl = await xlPromiseOrFile;
+      if (!xl) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
+      downloadBlob(xl, xl.name);
+    };
+    $('#vx-share', w).onclick = async () => {
+      const xl = await xlPromiseOrFile;
+      const csv = Report.buildWeeklyCsvFile(r);
+      let target = [csv].filter(Boolean);
+      if (xl && typeof navigator.canShare === 'function') {
+        try { if (navigator.canShare({ files: [xl] })) target = [xl]; } catch (e) {}
+      }
+      shareReport(title, text, target, xl ? [xl] : [csv]);
+    };
+  },
+
+  /** 2) 24회 달성자 사진 기기 내 바로 보기 모달 */
+  async viewAchieverPhotosModal(r, title) {
+    if (!r.achievers || !r.achievers.length) {
+      return Modal.alert('선택한 기간에 24회 마일리지를 새로 달성한 형제가 없습니다.');
+    }
+    const assetsList = await Promise.all(
+      r.achievers.map(a => this.buildBrotherBlockAssets(a.person, Math.round(a.milestone / CONFIG.mileageUnit)))
+    );
+
+    const w = Modal.open(`
+      <h3 style="margin:0 0 .3rem">🔍 24회 달성자 사진 보기 (${assetsList.length}명)</h3>
+      <p class="muted" style="margin:0 0 .7rem;font-size:.82rem">사진 있는 기록은 사진+날짜, 사진 없는 기록은 날짜만 표시됩니다. 사진을 누르면 크게 볼 수 있습니다.</p>
+      <div style="max-height:66vh;overflow-y:auto;padding-right:.2rem">
+        ${assetsList.map((as, idx) => {
+          const { person, summary, blobByAttId, urlByAttId, photoItems } = as;
+          const rows = Report.dateGridRows(summary.slice, 10);
+          return `
+            <div class="card" style="border:1.5px solid #cbd5e1;margin-bottom:.85rem">
+              <div style="display:flex;align-items:center;justify-content:space-between;flex-wrap:wrap;gap:.4rem;margin-bottom:.4rem">
+                <div class="ach-head">${idx + 1}) ${esc(unitLabel(person))} ${this.memberLink(person.id, person.name, summary.stage)} <span class="badge">${summary.milestone}회차 (${summary.startOrd}~${summary.endOrd}회)</span></div>
+                <div class="muted" style="font-size:.82rem">사진 인증 ${photoItems.length}건 · 날짜만 ${summary.slice.length - photoItems.length}건 · 전역 ${fmtYYMMDD(person.dischargeDate)}</div>
+              </div>
+              <table style="width:100%;font-size:.78rem;border-collapse:collapse;text-align:center;margin-bottom:.5rem">
+                <tbody>
+                  ${rows.map((row, ri) => {
+                    const st = summary.startOrd + ri * 10;
+                    const en = st + row.length - 1;
+                    return `<tr style="border-bottom:1px solid #e2e8f0">
+                      <th style="padding:.22rem .4rem;background:#f1f5f9;width:72px">${st}~${en}회</th>
+                      ${row.map(d => `<td style="padding:.22rem .3rem;font-weight:600">${d}</td>`).join('')}
+                      ${Array.from({ length: 10 - row.length }).map(() => '<td></td>').join('')}
+                    </tr>`;
+                  }).join('')}
+                </tbody>
+              </table>
+              ${this.renderMixedBlockTimelineHtml(summary.slice, blobByAttId, urlByAttId, true)}
+              <div class="row" style="margin-top:.5rem">
+                <button type="button" class="btn small primary" data-va-share="${idx}">📧 이 형제만 메일 발송</button>
+                <button type="button" class="btn small ghost" data-va-dl="${idx}">💾 증빙시트·사진(${photoItems.length}장) 저장</button>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap">
+        <button type="button" class="btn primary small" id="va-share-all" style="background:#1e3a8a">📸 전체 달성자 사진 메일발송</button>
+        <button type="button" class="btn primary" data-ok>닫기</button>
+      </div>`, 'xwide');
+
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+    this.bindMemberHistoryLinks(w);
+    $$('img[data-zoom-url]', w).forEach(img => img.onclick = () => this.showPhoto(img.dataset.zoomUrl, img.dataset.zoomCap));
+    $$('[data-va-share]', w).forEach(b => b.onclick = () => {
+      const as = assetsList[+b.dataset.vaShare];
+      this.shareSingleBrother(as.person, as.summary.stage, r);
+    });
+    $$('[data-va-dl]', w).forEach(b => b.onclick = () => {
+      const as = assetsList[+b.dataset.vaDl];
+      const list = [as.sheetFile, ...as.indivFiles].filter(Boolean);
+      if (list.length) downloadFiles(list);
+    });
+    $('#va-share-all', w).onclick = () => {
+      const sheetFiles = assetsList.map(x => x.sheetFile).filter(Boolean);
+      const allFiles = assetsList.flatMap(x => [x.sheetFile, ...x.indivFiles]).filter(Boolean);
+      const totalPhotoCnt = assetsList.reduce((s, x) => s + x.indivFiles.length, 0);
+      shareReport(
+        `${title} - 24회 달성자(${r.achievers.length}명·사진${totalPhotoCnt}장)`,
+        Report.achieversOnlyText(r),
+        allFiles,
+        sheetFiles.length ? sheetFiles : allFiles
+      );
+    };
+  },
+
+  /** 3) 새신자(처음 온 사람) 사진 기기 내 바로 보기 모달 */
+  async viewFirstTimerPhotosModal(r, title, firstText) {
+    const firstTimers = r.firstTimers || [];
+    if (!firstTimers.length) {
+      return Modal.alert('선택한 기간에 처음 온 신규 출석자가 없습니다.');
+    }
+    const items = await Promise.all(firstTimers.map(async a => {
+      const blob = a.hasPhoto ? await Store.getPhoto(a.id) : null;
+      return {
+        att: a,
+        blob,
+        url: blob ? this.thumbURL(blob) : '',
+        file: blob ? new File([blob], safeFileName(a.fileName || `${a.date}_${a.time}_${a.memberName}`) + '.jpg', { type: 'image/jpeg' }) : null,
+      };
+    }));
+    const photoCount = items.filter(x => x.blob).length;
+
+    const w = Modal.open(`
+      <h3 style="margin:0 0 .3rem">🔍 새신자 사진 보기 (${firstTimers.length}명 · 사진 ${photoCount}장)</h3>
+      <p class="muted" style="margin:0 0 .7rem;font-size:.82rem">사진을 누르면 크게 확대되며, 이름을 누르면 해당 형제의 출석 이력을 볼 수 있습니다.</p>
+      <div class="hist-photo-grid" style="max-height:66vh;overflow-y:auto">
+        ${items.map((it, idx) => {
+          const a = it.att;
+          const cap = `[${a.label}] ${a.memberName} · ${a.date}(${weekdayOf(a.date)}) ${a.time}`;
+          return `
+            <div class="hist-photo-item">
+              ${it.url
+                ? `<img src="${it.url}" data-zoom-url="${it.url}" data-zoom-cap="${esc(cap)}" alt="${esc(cap)}">`
+                : `<div style="aspect-ratio:4/3;background:#f1f5f9;display:flex;align-items:center;justify-content:center;color:#64748b;font-weight:700">사진 없음 (수동입력)</div>`}
+              <div class="meta" style="flex-direction:column;align-items:flex-start;gap:.2rem">
+                <div><b>${idx + 1}. [${esc(a.label)}] ${this.memberLink(a.person?.id, a.memberName)}</b> <span class="badge" style="background:var(--green)">첫출석</span></div>
+                <div class="muted" style="font-size:.78rem">${a.date}(${weekdayOf(a.date)}) ${a.time} · 전역 ${fmtYYMMDD(a.dischargeDate) || '미입력'}</div>
+              </div>
+            </div>`;
+        }).join('')}
+      </div>
+      <div class="modal-actions" style="justify-content:space-between;flex-wrap:wrap">
+        <div style="display:flex;gap:.5rem;flex-wrap:wrap">
+          <button type="button" class="btn primary small" style="background:var(--green)" id="vf-share">🌱 새신자 사진 메일 발송</button>
+          <button type="button" class="btn ghost small" id="vf-dl">💾 사진(${photoCount}장) 저장</button>
+        </div>
+        <button type="button" class="btn primary" data-ok>닫기</button>
+      </div>`, 'xwide');
+
+    w.querySelector('[data-ok]').onclick = () => Modal.close(w);
+    this.bindMemberHistoryLinks(w);
+    $$('img[data-zoom-url]', w).forEach(img => img.onclick = () => this.showPhoto(img.dataset.zoomUrl, img.dataset.zoomCap));
+    $('#vf-dl', w).onclick = () => {
+      const files = items.map(x => x.file).filter(Boolean);
+      if (!files.length) return Modal.alert('저장할 사진 파일이 없습니다.');
+      downloadFiles(files);
+    };
+    $('#vf-share', w).onclick = async () => {
+      const sheetFile = await buildMultiPhotoSheetFile(
+        `${CONFIG.churchName} 새신자 출석 인증 (${firstTimers.length}명)`,
+        items.map(it => ({
+          line1: `[${it.att.label}] ${it.att.memberName} (전역 ${fmtYYMMDD(it.att.dischargeDate) || '미입력'})`,
+          line2: `${it.att.date}(${weekdayOf(it.att.date)}) ${it.att.time} 첫 출석 · ${it.att.manual ? '수동입력' : '사진인증'}`,
+          blob: it.blob,
+        }))
+      );
+      const files = items.map(x => x.file).filter(Boolean);
+      const shareList = [sheetFile, ...files].filter(Boolean);
+      const dlList = sheetFile ? [sheetFile] : files;
+      shareReport(`${title} - 새신자(${firstTimers.length}명·사진${photoCount}장)`, firstText, shareList, dlList);
+    };
   },
 
   /* ===================== 수동 출석 보정 ===================== */
@@ -1021,7 +1517,7 @@ const Admin = {
               <tbody>
                 ${pendingItems.map((it, idx) => `
                   <tr class="pend-item-row" data-mid="${it.member.id}" data-stage="${it.stage}">
-                    <td><b>${esc(unitLabel(it.member))} ${esc(it.member.name)}</b></td>
+                    <td><b>${esc(unitLabel(it.member))}</b> ${this.memberLink(it.member.id, it.member.name, it.stage)}</td>
                     <td>${fmtYYMMDD(it.member.dischargeDate)}</td>
                     <td><b>${it.member.total}회</b></td>
                     <td><span class="badge" style="background:#dc2626;color:#fff">${it.stage}차 (${it.count}회)</span></td>
@@ -1058,6 +1554,7 @@ const Admin = {
       </div>
       <div id="mil-table-wrap"></div>`;
 
+    this.bindMemberHistoryLinks(body);
     // 미건의 대상자 행의 날짜 변경 시 YY.MM.DD 실시간 미리보기 업데이트
     $$('.pend-item-row', body).forEach(row => {
       const bIn = $('.pend-base', row);
@@ -1177,7 +1674,7 @@ const Admin = {
               ${filtered.length ? filtered.map(r => `
                 <tr>
                   <td>${esc(unitLabel(r.m))}</td>
-                  <td><b>${esc(r.m.name)}</b></td>
+                  <td>${this.memberLink(r.m.id, r.m.name)}</td>
                   <td>${fmtYYMMDD(r.m.dischargeDate)}</td>
                   <td><b>${r.m.total}회</b></td>
                   <td>${r.pending ? `<span class="badge" style="background:#dc2626;color:#fff">미건의 ${r.pending}건</span>` : (r.granted ? `<span class="badge" style="background:#16a34a;color:#fff">${r.granted}차 완료</span>` : '<span class="muted">-</span>')}</td>
@@ -1197,6 +1694,7 @@ const Admin = {
           </table>
         </div>`;
 
+      this.bindMemberHistoryLinks($('#mil-table-wrap'));
       $$('[data-grant]', $('#mil-table-wrap')).forEach(b => b.onclick = () => {
         const r = allRows.find(x => String(x.m.id) === String(b.dataset.grant));
         if (r) this.openMileageModal(r);
@@ -1789,9 +2287,10 @@ const Admin = {
     const list = await Store.dischargedList();
     body.innerHTML = `<div class="note">전역일이 지난 형제는 자동으로 이곳에 옮겨져 출석 명단에서 사라집니다. 출석 기록·사진·마일리지 이력은 증빙용으로 보존됩니다.</div>
       ${list.length ? `<div class="tbl-wrap"><table class="tbl"><thead><tr><th>소속</th><th>이름</th><th>전역일</th><th>누적</th><th>이동일</th><th></th></tr></thead>
-      <tbody>${list.map(d => `<tr><td>${esc(unitLabel(d))}</td><td><b>${esc(d.name)}</b></td><td>${d.dischargeDate}</td><td>${d.total}</td><td>${d.movedAt}</td>
+      <tbody>${list.map(d => `<tr><td>${esc(unitLabel(d))}</td><td>${this.memberLink(d.id, d.name)}</td><td>${d.dischargeDate}</td><td>${d.total}</td><td>${d.movedAt}</td>
         <td class="nowrap"><button class="btn small ghost" data-hist="${d.id}">기록</button><button class="btn small ghost" data-rest="${d.id}">복원</button></td></tr>`).join('')}</tbody></table></div>`
       : '<p class="muted">전역자가 없습니다.</p>'}`;
+    this.bindMemberHistoryLinks(body);
     $$('[data-hist]').forEach(b => b.onclick = () => this.history(list.find(d => d.id === b.dataset.hist), true));
     $$('[data-rest]').forEach(b => b.onclick = () => {
       const d = list.find(x => x.id === b.dataset.rest);

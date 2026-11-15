@@ -192,6 +192,139 @@ const Report = {
     return `${fmtDate(r.prev)}(${WEEK[r.prev.getDay()]}) ${fmtTime(r.prev)} ~ ${fmtDate(r.cutoff)}(${WEEK[r.cutoff.getDay()]}) ${fmtTime(r.cutoff)}`;
   },
 
+  /** 특정 형제의 24회 회차별 블록 요약 정보 생성 (리포트/이력 모달/단일 메일 발송 공용) */
+  achieverBlockSummary(p, stageOpt = null) {
+    const U = CONFIG.mileageUnit;
+    const tl = Store.timeline(p);
+    const maxStage = Math.max(1, Math.ceil((tl.length || 1) / U));
+    const stage = (stageOpt && +stageOpt >= 1 && +stageOpt <= maxStage) ? +stageOpt : maxStage;
+    const startOrd = (stage - 1) * U + 1;
+    const endOrd = stage * U;
+    const slice = tl.slice(startOrd - 1, endOrd).map((e, i) => ({ ...e, ord: startOrd + i }));
+    const block = slice.filter(e => e.att).map(e => ({ ...e.att, memberName: p.name, unit: unitLabel(p), ord: e.ord }));
+    const grants = p.grants || [];
+    const grantedBlocks = Math.floor(Store.grantedUpTo(p, grants) / U);
+    const earnedBlocks = Math.floor((p.total || 0) / U);
+    const pendingBlocks = Math.max(0, earnedBlocks - grantedBlocks);
+    const slots = Store.getMemberSlots(p, grants);
+    const slot = slots.find(sl => sl.stage === stage) || { stage, count: endOrd, baseDate: '', proposedDate: '' };
+    const missing = slice.filter(e => !e.att).length;
+    return {
+      person: p,
+      stage,
+      maxStage,
+      milestone: endOrd,
+      startOrd,
+      endOrd,
+      total: p.total || 0,
+      slice,
+      blockDates: slice,
+      block,
+      missing,
+      grantedBlocks,
+      earnedBlocks,
+      pendingBlocks,
+      slot,
+    };
+  },
+
+  /** 특정 형제 한 명의 24회 달성/출석 요약 줄 생성 */
+  _achieverDetailLines(a, idxLabel = '1') {
+    const p = a.person;
+    const U = CONFIG.mileageUnit;
+    const photoAtts = (a.block || []).filter(b => b.hasPhoto);
+    const manualAtts = (a.block || []).filter(b => !b.hasPhoto);
+    const preCount = (a.missing || 0) + manualAtts.length;
+    const st = a.startOrd || (a.milestone - U + 1);
+    const L = [];
+    L.push(`--------------------------------------------------`);
+    L.push(`${idxLabel}) [${unitLabel(p)}] ${p.name} (전역: ${p.dischargeDate || '미기입'})${p.discharged ? ' [전역 처리]' : ''}`);
+    L.push(`   · 마일리지 회기: ${a.milestone}회차 구간 (${st}~${a.milestone}회 / 총 누적: ${a.total ?? p.total}회)`);
+    if (a.slot && a.slot.proposedDate) {
+      L.push(`   · 마일리지 건의: 건의 완료 (기준일 ${fmtYYMMDD(a.slot.baseDate) || '-'} / 건의일 ${fmtYYMMDD(a.slot.proposedDate)})`);
+    } else if ((a.total ?? p.total) >= a.milestone) {
+      L.push(`   · 마일리지 건의: ${a.pendingBlocks > 0 ? '신규 대상 (' + a.pendingBlocks + '건 건의 필요)' : '건의 상태 확인'}`);
+    } else {
+      L.push(`   · 마일리지 진행: 현재 ${a.total ?? p.total}회 / ${a.milestone}회 목표`);
+    }
+    if (preCount > 0) {
+      L.push(`   · -사진촬영 전/수기 출석-: 총 ${preCount}회`);
+      if (a.missing > 0) L.push(`     - 전산화 이전(수기 명부): ${a.missing}회`);
+      if (manualAtts.length > 0) {
+        L.push(`     - 시스템 수기 입력(사진 미촬영): ${manualAtts.length}회 (${manualAtts.map(b => b.date).join(', ')})`);
+        manualAtts.forEach(b => { if (b.reason) L.push(`       ※ 사유: ${b.reason}`); });
+      }
+    }
+    L.push(`   · [사진 인증 출석]: 총 ${photoAtts.length}회 (인증 사진 ${photoAtts.length}장)`);
+    if (photoAtts.length > 0) {
+      L.push(`     - 사진 인증 일자: ${photoAtts.map(b => `${b.date}${b.time ? ' ' + b.time : ''}`).join(', ')}`);
+    }
+    if (a.blockDates && a.blockDates.length) {
+      L.push(`   · ${st}~${a.milestone}회 예배 날짜 (월-일, 00-00 = 날짜 모름):`);
+      this.dateGridRows(a.blockDates).forEach((row, ri) => {
+        const f = st + ri * 10;
+        L.push(`     ${String(f).padStart(3, ' ')}~${String(f + row.length - 1).padStart(3, ' ')}회 | ${row.join('  ')}`);
+      });
+    }
+    L.push(`--------------------------------------------------`);
+    return L;
+  },
+
+  /** 단일 형제 메일 발송용 간결 본문 ('이 형제만 메일 발송' 전용 - 전체 명단 제외 및 URL < 1900자 준수) */
+  achieverText(r, a) {
+    const p = a.person;
+    const U = CONFIG.mileageUnit;
+    const st = a.startOrd || (a.milestone - U + 1);
+    const photoAtts = (a.block || []).filter(b => b.hasPhoto);
+    const manualAtts = (a.block || []).filter(b => !b.hasPhoto);
+    const preCount = (a.missing || 0) + manualAtts.length;
+    const L = [];
+    L.push(`[${CONFIG.churchName} 증빙] ${unitLabel(p)} ${p.name} (${a.milestone}회차)`);
+    if (r) L.push(`기간: ${this.periodText(r)}`);
+    L.push(`전역: ${fmtYYMMDD(p.dischargeDate) || '-'} | 누적: ${a.total ?? p.total}회 | 구간: ${st}~${a.milestone}회`);
+    if (a.slot && a.slot.proposedDate) {
+      L.push(`건의: 완료(${fmtYYMMDD(a.slot.baseDate) || '-'}부/${fmtYYMMDD(a.slot.proposedDate)})`);
+    } else if ((a.total ?? p.total) >= a.milestone) {
+      L.push(`건의: ${a.pendingBlocks > 0 ? `필요(${a.pendingBlocks}건)` : '완료'}`);
+    } else {
+      L.push(`진행: ${a.total ?? p.total}/${a.milestone}회`);
+    }
+    L.push(`인증: 사진 ${photoAtts.length}장 / 수기·이전 ${preCount}회`);
+    if (photoAtts.length > 0) {
+      L.push(`사진일자: ${photoAtts.map(b => `${b.date}${b.time ? ' ' + b.time : ''}`).join(', ')}`);
+    }
+    if (a.blockDates && a.blockDates.length) {
+      L.push(`[${st}~${a.milestone}회 예배 날짜(월-일)]`);
+      this.dateGridRows(a.blockDates).forEach((row, ri) => {
+        const f = st + ri * 10;
+        L.push(`${f}~${f + row.length - 1}: ${row.join(' ')}`);
+      });
+    }
+    L.push('※ 출석·사진 증빙 시트(.jpg) 첨부');
+    return L.join('\n');
+  },
+
+  /** 24회 달성자 사진 일괄 메일 발송용 본문 */
+  achieversOnlyText(r) {
+    const ach = r.achievers || [];
+    const achPhotoCount = ach.reduce((sum, a) => sum + (a.block || []).filter(b => b.hasPhoto).length, 0);
+    const L = [];
+    L.push(`[${CONFIG.churchName} 24회 마일리지 달성자 확인 및 사진 증빙]`);
+    L.push(`기간: ${this.periodText(r)}`);
+    L.push(`달성 인원: ${ach.length}명 (사진 인증 ${achPhotoCount}장 / 출석 증빙 시트 포함)`);
+    L.push('');
+    if (!ach.length) {
+      L.push('  - 이 기간 신규 24회 마일리지 달성자가 없습니다.');
+    } else {
+      ach.forEach((a, i) => {
+        this._achieverDetailLines(a, String(i + 1)).forEach(line => L.push(line));
+        L.push('');
+      });
+    }
+    this.dischargeLines(r).forEach(x => L.push(x));
+    return L.join('\n');
+  },
+
   /** 이메일 본문용 텍스트 */
   text(r) {
     const achPhotoCount = (r.achievers || []).reduce((sum, a) => sum + (a.block || []).filter(b => b.hasPhoto).length, 0);
@@ -436,11 +569,10 @@ const Report = {
     return new File([csvContent], fileName, { type: 'text/csv' });
   },
 
-  /** 주간 리포트 다운로드 및 첨부용 엑셀 파일(.xlsx) 생성 */
-  async buildWeeklyExcelFile(r) {
-    if (typeof XLSX === 'undefined') return null;
-    const wb = XLSX.utils.book_new();
+  /** 주간 리포트 엑셀 시트 데이터 생성 (엑셀 생성 및 기기 내 보기 모달 공용) */
+  async buildWeeklySheetData(r) {
     const s = r.stats;
+    const people = r.people || await Store.allPeopleFull();
 
     // 1. 날짜별_부대통계 시트
     const statAoa = [
@@ -448,91 +580,96 @@ const Report = {
       ...s.rows.map(row => [row.label, ...row.counts, row.sum]),
       ['전체 합계', ...s.totals, s.totals.reduce((a, b) => a + b, 0)],
     ];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(statAoa), '날짜별_부대통계');
 
-    // 1-2. 처음_온_사람_명단 시트
-    const firstRows = (r.firstTimers || []).map((a, idx) => ({
-      연번: idx + 1,
-      첫출석날짜: a.date,
-      요일: weekdayOf(a.date),
-      첫출석시간: a.time,
-      소속부대: a.label,
-      이름: a.memberName,
-      전역일: fmtYYMMDD(a.dischargeDate),
-      출석구분: a.manual ? '수동입력' : '사진촬영',
-      사진파일명: a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
-    }));
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(firstRows.length ? firstRows : [{ 안내: '선택한 기간에 처음 온 신규 출석자가 없습니다.' }]),
-      '처음_온_사람_명단'
-    );
+    // 2. 처음_온_사람_명단 시트
+    const firstList = r.firstTimers || [];
+    const firstAoa = firstList.length
+      ? [
+        ['연번', '첫출석날짜', '요일', '첫출석시간', '소속부대', '이름', '전역일', '출석구분', '사진파일명'],
+        ...firstList.map((a, idx) => [
+          idx + 1,
+          a.date,
+          weekdayOf(a.date),
+          a.time,
+          a.label,
+          a.memberName,
+          fmtYYMMDD(a.dischargeDate),
+          a.manual ? '수동입력' : '사진촬영',
+          a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
+        ]),
+      ]
+      : [['안내'], ['선택한 기간에 처음 온 신규 출석자가 없습니다.']];
 
-    // 2. 출석자_전체명단 시트
-    const attRows = (r.periodAtts || []).map((a, idx) => ({
-      연번: idx + 1,
-      출석날짜: a.date,
-      요일: weekdayOf(a.date),
-      출석시간: a.time,
-      소속부대: a.label,
-      이름: a.memberName,
-      전역일: fmtYYMMDD(a.dischargeDate),
-      금회포함_누적출석: a.cumCount,
-      출석구분: a.manual ? '수동보정' : '사진촬영',
-      수동사유: a.reason || '',
-      재촬영횟수: a.retakes || 0,
-      사진파일명: a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
-    }));
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(attRows.length ? attRows : [{ 안내: '선택한 기간에 출석 기록이 없습니다.' }]),
-      '출석자_전체명단'
-    );
+    // 3. 출석자_전체명단 시트
+    const pAtts = r.periodAtts || [];
+    const attAoa = pAtts.length
+      ? [
+        ['연번', '출석날짜', '요일', '출석시간', '소속부대', '이름', '전역일', '금회포함_누적출석', '출석구분', '수동사유', '재촬영횟수', '사진파일명'],
+        ...pAtts.map((a, idx) => [
+          idx + 1,
+          a.date,
+          weekdayOf(a.date),
+          a.time,
+          a.label,
+          a.memberName,
+          fmtYYMMDD(a.dischargeDate),
+          a.cumCount,
+          a.manual ? '수동보정' : '사진촬영',
+          a.reason || '',
+          a.retakes || 0,
+          a.hasPhoto ? (a.fileName + '.jpg') : '사진없음',
+        ]),
+      ]
+      : [['안내'], ['선택한 기간에 출석 기록이 없습니다.']];
 
-    // 3. 24회_마일리지_달성자 시트
-    const achRows = (r.achievers || []).map((a, idx) => {
-      const p = a.person;
-      const photoAtts = a.block.filter(b => b.hasPhoto);
-      const manualAtts = a.block.filter(b => !b.hasPhoto);
-      const preCount = (a.missing || 0) + manualAtts.length;
-      return {
-        연번: idx + 1,
-        소속부대: unitLabel(p),
-        이름: p.name,
-        전역일: fmtYYMMDD(p.dischargeDate),
-        달성회차: `${a.milestone}회차`,
-        총누적출석: a.total,
-        사진촬영전_출석횟수: preCount,
-        사진인증_출석횟수: photoAtts.length,
-        사진인증_일자목록: photoAtts.map(b => b.date).join(', '),
-      };
-    });
-    XLSX.utils.book_append_sheet(
-      wb,
-      XLSX.utils.json_to_sheet(achRows.length ? achRows : [{ 안내: '선택한 기간에 24회 마일리지 신규 달성자가 없습니다.' }]),
-      '24회_마일리지_달성자'
-    );
+    // 4. 24회_마일리지_달성자 시트
+    const achList = r.achievers || [];
+    const achAoa = achList.length
+      ? [
+        ['연번', '소속부대', '이름', '전역일', '달성회차', '총누적출석', '사진촬영전_출석횟수', '사진인증_출석횟수', '사진인증_일자목록'],
+        ...achList.map((a, idx) => {
+          const p = a.person;
+          const photoAtts = a.block.filter(b => b.hasPhoto);
+          const manualAtts = a.block.filter(b => !b.hasPhoto);
+          const preCount = (a.missing || 0) + manualAtts.length;
+          return [
+            idx + 1,
+            unitLabel(p),
+            p.name,
+            fmtYYMMDD(p.dischargeDate),
+            `${a.milestone}회차`,
+            a.total,
+            preCount,
+            photoAtts.length,
+            photoAtts.map(b => b.date).join(', '),
+          ];
+        }),
+      ]
+      : [['안내'], ['선택한 기간에 24회 마일리지 신규 달성자가 없습니다.']];
 
-    // 3-2. 전역자 시트
-    const disRows = [
-      ...(r.dischargees || []).map(d => ({ 구분: '전역(기간 내 도래)', 소속부대: d.label, 이름: d.name, 전역일: fmtYYMMDD(d.dischargeDate), 누적출석: d.total })),
-      ...(r.upcomingDischarge || []).map(d => ({ 구분: '전역예정(다음 7일)', 소속부대: d.label, 이름: d.name, 전역일: fmtYYMMDD(d.dischargeDate), 누적출석: d.total })),
+    // 5. 전역자 시트
+    const disItems = [
+      ...(r.dischargees || []).map(d => ({ kind: '전역(기간 내 도래)', ...d })),
+      ...(r.upcomingDischarge || []).map(d => ({ kind: '전역예정(다음 7일)', ...d })),
     ];
-    XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(disRows.length ? disRows : [{ 안내: '이 기간 전역일이 도래한 인원이 없습니다.' }]), '전역자');
+    const disAoa = disItems.length
+      ? [
+        ['구분', '소속부대', '이름', '전역일', '누적출석'],
+        ...disItems.map(d => [d.kind, d.label, d.name, fmtYYMMDD(d.dischargeDate), d.total]),
+      ]
+      : [['안내'], ['이 기간 전역일이 도래한 인원이 없습니다.']];
 
-    // 3-3. 마일리지 달성 구간 예배일 (10개씩)
+    // 6. 달성구간_예배일 시트 (10개씩)
     const gridAoa = [];
-    (r.achievers || []).forEach(a => {
+    achList.forEach(a => {
       if (!a.blockDates || !a.blockDates.length) return;
       const st = a.milestone - CONFIG.mileageUnit + 1;
       gridAoa.push([`${unitLabel(a.person)} ${a.person.name} - ${st}~${a.milestone}회 예배 날짜 (월-일)`]);
       this.dateGridRows(a.blockDates).forEach((row, ri) => gridAoa.push([`${st + ri * 10}~${st + ri * 10 + row.length - 1}회`, ...row]));
       gridAoa.push([]);
     });
-    if (gridAoa.length) XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(gridAoa), '달성구간_예배일');
 
-    // 4. 전체_마일리지_현황 (1~5차 기준일·건의일 2행 헤더)
-    const people = r.people || await Store.allPeopleFull();
+    // 7. 전체_마일리지_현황 시트 (1~5차 기준일·건의일 2행 헤더)
     const milAoa = [
       ['상태', '소속부대', '이름', '전역일', '누적출석', '사진촬영전출석', '마지막출석일', '24회', '', '48회', '', '72회', '', '96회', '', '120회', ''],
       ['', '', '', '', '', '', '', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일', '기준일', '건의일'],
@@ -551,8 +688,7 @@ const Report = {
       slots.forEach(sl => row.push(fmtYYMMDD(sl.baseDate), fmtYYMMDD(sl.proposedDate)));
       milAoa.push(row);
     });
-    const wsMil = XLSX.utils.aoa_to_sheet(milAoa);
-    wsMil['!merges'] = [
+    const milMerges = [
       { s: { r: 0, c: 0 }, e: { r: 1, c: 0 } },
       { s: { r: 0, c: 1 }, e: { r: 1, c: 1 } },
       { s: { r: 0, c: 2 }, e: { r: 1, c: 2 } },
@@ -566,7 +702,28 @@ const Report = {
       { s: { r: 0, c: 13 }, e: { r: 0, c: 14 } },
       { s: { r: 0, c: 15 }, e: { r: 0, c: 16 } },
     ];
-    XLSX.utils.book_append_sheet(wb, wsMil, '전체_마일리지_현황');
+
+    return [
+      { name: '날짜별_부대통계', label: '1. 날짜별·부대통계', aoa: statAoa, headerRows: 1, footerRows: 1, nameCol: -1, rowPersonIds: [] },
+      { name: '처음_온_사람_명단', label: `2. 처음 온 사람 (${firstList.length})`, aoa: firstAoa, headerRows: 1, nameCol: firstList.length ? 5 : -1, rowPersonIds: firstList.map(a => a.person?.id || '') },
+      { name: '출석자_전체명단', label: `3. 출석자 전체명단 (${pAtts.length})`, aoa: attAoa, headerRows: 1, nameCol: pAtts.length ? 5 : -1, rowPersonIds: pAtts.map(a => a.person?.id || '') },
+      { name: '24회_마일리지_달성자', label: `4. 24회 달성자 (${achList.length})`, aoa: achAoa, headerRows: 1, nameCol: achList.length ? 2 : -1, rowPersonIds: achList.map(a => a.person?.id || '') },
+      { name: '전역자', label: `5. 전역자 (${disItems.length})`, aoa: disAoa, headerRows: 1, nameCol: disItems.length ? 2 : -1, rowPersonIds: disItems.map(d => d.person?.id || '') },
+      ...(gridAoa.length ? [{ name: '달성구간_예배일', label: '6. 달성구간 예배일', aoa: gridAoa, headerRows: 0, nameCol: -1, rowPersonIds: [] }] : []),
+      { name: '전체_마일리지_현황', label: `7. 전체 마일리지 (${people.length})`, aoa: milAoa, headerRows: 2, merges: milMerges, nameCol: 2, rowPersonIds: people.map(p => p.id) },
+    ];
+  },
+
+  /** 주간 리포트 다운로드 및 첨부용 엑셀 파일(.xlsx) 생성 */
+  async buildWeeklyExcelFile(r) {
+    if (typeof XLSX === 'undefined') return null;
+    const wb = XLSX.utils.book_new();
+    const sheets = await this.buildWeeklySheetData(r);
+    sheets.forEach(sh => {
+      const ws = XLSX.utils.aoa_to_sheet(sh.aoa);
+      if (sh.merges) ws['!merges'] = sh.merges;
+      XLSX.utils.book_append_sheet(wb, ws, sh.name);
+    });
 
     const wbout = XLSX.write(wb, { bookType: 'xlsx', type: 'array' });
     const rangeTag = `${r.startDateStr || fmtDate(r.prev)}_${r.endDateStr || fmtDate(r.cutoff)}`;
