@@ -74,7 +74,7 @@ function fmtYYMMDD(v) {
   return `${y.slice(-2)}.${m}.${d}`;
 }
 
-const HISTORY_SEED_REV = 2026111501;
+const HISTORY_SEED_REV = 2026111502;
 
 /** 앱 출석 기록(m.atts)과 겹치는 날짜를 과거 출석일자 목록에서 1회씩 제외해 중복 합산을 방지 */
 function dedupePastDates(seedDates, atts) {
@@ -530,9 +530,11 @@ const Store = {
   async _runHistorySeed(force = false) {
     const seeds = (typeof window !== 'undefined' && Array.isArray(window.SEED_PEOPLE_HISTORY))
       ? window.SEED_PEOPLE_HISTORY : [];
+    const sysAtts = (typeof window !== 'undefined' && Array.isArray(window.SEED_SYSTEM_ATTENDANCE))
+      ? window.SEED_SYSTEM_ATTENDANCE : [];
     if (!seeds.length) return { seeded: false, created: 0, updated: 0 };
 
-    const [ms, allAtts, allGrants, rawSettings, disList] = await Promise.all([
+    let [ms, allAtts, allGrants, rawSettings, disList] = await Promise.all([
       DB.all('members'),
       DB.all('attendance'),
       DB.all('mileage'),
@@ -540,20 +542,23 @@ const Store = {
       DB.all('discharged'),
     ]);
     const settings = rawSettings || {};
-    const seedByUN = Object.fromEntries(seeds.map(p => [`${p.unit}|${p.name}`, p]));
+    const activeSeeds = seeds.filter(p => !p.discharged);
+    const dischargedSeeds = seeds.filter(p => p.discharged);
+    const seedByUN = Object.fromEntries(activeSeeds.map(p => [`${p.unit}|${p.name}`, p]));
 
     const hasEmptyPast = ms.some(m => {
       const seed = seedByUN[`${m.unit}|${m.name}`];
       return seed && seed.dates.length > 0 && (!Array.isArray(m.pastDates) || m.pastDates.length === 0);
     });
-    if (!force && ms.length > 0 && settings.historySeedRev === HISTORY_SEED_REV && !hasEmptyPast) {
+    if (!force && ms.length > 0 && settings.historySeedRev === HISTORY_SEED_REV
+      && settings.sysAttSeededRev === HISTORY_SEED_REV && !hasEmptyPast) {
       return { seeded: false, created: 0, updated: 0 };
     }
 
-    // 새 브라우저/빈 DB인 경우 145명 초기 시드 적재 (서버 연결 시 pull 전 충돌 방지를 위해 큐에는 올리지 않음)
-    if (ms.length === 0 && disList.length === 0) {
-      let created = 0;
-      for (const seed of seeds) {
+    let created = 0;
+    const isFreshDb = ms.length === 0 && disList.length === 0;
+    if (isFreshDb) {
+      for (const seed of activeSeeds) {
         const seedSlots = seedSlotsToObjects(seed.slots);
         await this.addMember({
           unit: seed.unit,
@@ -566,9 +571,61 @@ const Store = {
         }, false);
         created++;
       }
-      settings.historySeedRev = HISTORY_SEED_REV;
-      await DB.put('settings', settings, 'main');
-      return { seeded: true, created, updated: 0 };
+      ms = await DB.all('members');
+      allGrants = await DB.all('mileage');
+    }
+
+    // 전역자 시드 (예: 표승진) 반영 및 누락 시 전역자 보관함 생성
+    for (const dSeed of dischargedSeeds) {
+      const seedSlots = seedSlotsToObjects(dSeed.slots);
+      const inActive = ms.find(m => m.unit === dSeed.unit && m.name === dSeed.name);
+      if (inActive) continue;
+      let dEx = disList.find(d => d.unit === dSeed.unit && d.name === dSeed.name);
+      if (!dEx) {
+        const memberId = uid();
+        const grants = seedSlots.map(sl => ({
+          id: uid(),
+          memberId,
+          memberName: dSeed.name,
+          unitLabel: dSeed.unit,
+          stage: sl.stage,
+          baseDate: sl.baseDate || '',
+          proposedDate: sl.proposedDate || sl.baseDate || dSeed.dc,
+          fromCount: (sl.stage - 1) * CONFIG.mileageUnit + 1,
+          uptoCount: sl.count,
+          days: 1,
+          memo: sl.memo || `${sl.stage}차(${sl.count}회)`,
+          createdAt: Date.now(),
+        }));
+        dEx = {
+          id: memberId,
+          name: dSeed.name,
+          unit: dSeed.unit,
+          company: null,
+          dischargeDate: dSeed.dc,
+          baseCount: dSeed.dates.length,
+          baseGrantedBlocks: seedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0),
+          baseLastDate: dSeed.last || null,
+          mileageSlots: seedSlots,
+          pastDates: dSeed.dates.slice(),
+          createdAt: dSeed.dc,
+          attendances: [],
+          mileage: grants,
+          movedAt: dSeed.dc,
+        };
+        await DB.put('discharged', dEx);
+        disList.push(dEx);
+      } else if (!Array.isArray(dEx.pastDates) || dEx.pastDates.length !== dSeed.dates.length) {
+        const nextPast = dedupePastDates(dSeed.dates, dEx.attendances);
+        dEx.pastDates = nextPast;
+        dEx.baseCount = nextPast.length;
+        dEx.baseLastDate = nextPast.filter(dt => !isUnknownDate(dt)).pop() || null;
+        if (seedSlots.length && (!Array.isArray(dEx.mileageSlots) || !dEx.mileageSlots.length)) {
+          dEx.mileageSlots = seedSlots;
+          dEx.baseGrantedBlocks = Math.max(dEx.baseGrantedBlocks || 0, seedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0));
+        }
+        await DB.put('discharged', dEx);
+      }
     }
 
     const attByMember = {};
@@ -576,8 +633,39 @@ const Store = {
     const grantsByMember = {};
     allGrants.forEach(g => (grantsByMember[g.memberId] = grantsByMember[g.memberId] || []).push(g));
 
-    const changed = [];
-    for (const seed of seeds) {
+    // 11.11(수) / 11.15(일) 시스템 출석 기록 누락분 자동 채움 (이미 해당 일자 사진/출석이 있으면 그대로 유지)
+    if (sysAtts.length && (isFreshDb || settings.sysAttSeededRev !== HISTORY_SEED_REV)) {
+      const mByUN = Object.fromEntries(ms.map(m => [`${m.unit}|${m.name}`, m]));
+      for (const sa of sysAtts) {
+        const m = mByUN[`${sa.unit}|${sa.name}`];
+        if (!m) continue;
+        const mAtts = attByMember[m.id] || [];
+        if (mAtts.some(a => a.date === sa.date)) continue;
+        const ts = new Date(`${sa.date}T${sa.time || '11:00'}:00+09:00`).getTime();
+        const attRec = {
+          id: `seed_att_${sa.date}_${sa.unit}_${sa.name}`,
+          memberId: m.id,
+          date: sa.date,
+          time: sa.time || '11:00',
+          ts: isNaN(ts) ? Date.now() : ts,
+          fileName: sa.fileName || `${sa.date} ${sa.time || '11:00'} ${m.name}`,
+          unitLabel: unitLabel(m),
+          memberName: m.name,
+          manual: false,
+          reason: '',
+          hasPhoto: false,
+          createdAt: isNaN(ts) ? Date.now() : ts,
+        };
+        await DB.put('attendance', attRec);
+        mAtts.push(attRec);
+        attByMember[m.id] = mAtts;
+      }
+      settings.sysAttSeededRev = HISTORY_SEED_REV;
+    }
+
+    let updated = 0;
+    const today = todayStr();
+    for (const seed of activeSeeds) {
       const seedSlots = seedSlotsToObjects(seed.slots);
       let hit = ms.filter(m => m.unit === seed.unit && m.name === seed.name && (!seed.dc || !m.dischargeDate || m.dischargeDate === seed.dc));
       if (!hit.length) {
@@ -585,7 +673,6 @@ const Store = {
         if (byUN.length === 1) hit = byUN;
       }
       if (!hit.length) {
-        // 전역자 보관함에 이미 이동된 경우에도 과거 출석일자가 비어 있으면 채워 둠
         const dHit = disList.filter(d => d.unit === seed.unit && d.name === seed.name);
         if (dHit.length === 1 && (!Array.isArray(dHit[0].pastDates) || !dHit[0].pastDates.length)) {
           const d = dHit[0];
@@ -605,21 +692,38 @@ const Store = {
       const nextPast = dedupePastDates(seed.dates, mAtts);
       const nextBaseCount = nextPast.length;
       const nextLastDate = nextPast.filter(d => !isUnknownDate(d)).pop() || null;
+      const totalAfter = nextBaseCount + mAtts.length;
 
       const curSlots = this.getMemberSlots(ex, mGrants);
-      const mergedSlots = this.normalizeSlots(curSlots.map(sl => {
-        const inc = seedSlots.find(x => +x.stage === sl.stage);
-        return {
-          stage: sl.stage,
-          count: sl.count,
-          baseDate: sl.baseDate || (inc && inc.baseDate) || '',
-          proposedDate: sl.proposedDate || (inc && inc.proposedDate) || '',
-          memo: sl.memo || (inc && inc.memo) || '',
-        };
-      }));
+      const mergedSlots = this.normalizeSlots(
+        curSlots.map(sl => {
+          const inc = seedSlots.find(x => +x.stage === sl.stage);
+          if (seed.overrideSlots) {
+            return {
+              stage: sl.stage,
+              count: sl.count,
+              baseDate: (inc && inc.baseDate) || '',
+              proposedDate: (inc && inc.proposedDate) || '',
+              memo: (inc && inc.memo) || sl.memo || '',
+            };
+          }
+          const rawProp = sl.proposedDate || (inc && inc.proposedDate) || '';
+          const safeProp = (rawProp && rawProp > today && inc && inc.proposedDate && inc.proposedDate <= today)
+            ? inc.proposedDate : rawProp;
+          return {
+            stage: sl.stage,
+            count: sl.count,
+            baseDate: sl.baseDate || (inc && inc.baseDate) || '',
+            proposedDate: safeProp,
+            memo: sl.memo || (inc && inc.memo) || '',
+          };
+        }).filter(sl => seed.overrideSlots ? totalAfter >= sl.count : true)
+      );
       const prevNormSlots = this.normalizeSlots(ex.mileageSlots || []);
       const prevEffective = this.normalizeSlots(curSlots);
-      const nextBlocks = Math.max(ex.baseGrantedBlocks || 0, mergedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0));
+      const nextBlocks = seed.overrideSlots
+        ? mergedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0)
+        : Math.max(ex.baseGrantedBlocks || 0, mergedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0));
 
       const pastChanged = !Array.isArray(ex.pastDates) || ex.pastDates.length !== nextPast.length
         || ex.pastDates.some((d, i) => d !== nextPast[i]);
@@ -639,17 +743,18 @@ const Store = {
         if (effectiveChanged) {
           await this.syncGrantsWithSlots(ex, mergedSlots, false);
         }
-        changed.push(ex);
+        updated++;
       }
     }
 
-    settings.historySeedRev = HISTORY_SEED_REV;
-    await DB.put('settings', settings, 'main');
+    // 시드 처리 도중 다른 비동기 작업이 settings(단말기 승인, 비밀번호 등)를 변경했을 수 있으므로 최신본을 다시 읽어 병합
+    const latestSettings = (await DB.get('settings', 'main')) || {};
+    latestSettings.historySeedRev = HISTORY_SEED_REV;
+    if (settings.sysAttSeededRev !== undefined) latestSettings.sysAttSeededRev = settings.sysAttSeededRev;
+    if (latestSettings.sysAttSeededRev === undefined) latestSettings.sysAttSeededRev = HISTORY_SEED_REV;
+    await DB.put('settings', latestSettings, 'main');
 
-    if (changed.length && typeof Backend !== 'undefined' && (await Backend.isConfigured())) {
-      await Backend.enqueue('upsertMembersBatch', { members: changed });
-    }
-    return { seeded: true, created: 0, updated: changed.length };
+    return { seeded: true, created, updated };
   },
 
   /* ---------- 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ---------- */

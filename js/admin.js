@@ -336,7 +336,7 @@ const Admin = {
             </div>
           ` : ''}
           <details><summary>전체 예배 날짜 (${a.allDates.length}회)</summary>
-            <div class="chips">${a.allDates.map(d => `<span>${d}(${weekdayOf(d)})</span>`).join('')}</div></details>
+            <div class="chips">${a.allDates.map((d, idx) => `<span>${idx + 1}회 ${esc(d)}</span>`).join('')}</div></details>
           <div class="thumbs ach-thumbs" data-i="${i}"><p class="muted">사진 불러오는 중…</p></div>
           <div class="row">
             <button class="btn small primary" data-share="${i}">📧 이 형제만 메일 앱 발송 (최근 24회 사진)</button>
@@ -773,6 +773,9 @@ const Admin = {
           <label>사진촬영 전 누적 출석횟수 <input id="mf-bc" type="number" min="0" value="${v.baseCount || 0}"></label>
         </div>
         <label>사진촬영 전 마지막 출석일 (선택) <input id="mf-bl" type="date" value="${v.baseLastDate || ''}"></label>
+        <label>사진촬영 전 출석일자 목록 (1회~도입 전, 콤마 구분 · 모르면 00.00.00)
+          <textarea id="mf-past" rows="3" placeholder="예) 25.11.02, 25.11.09, 25.11.30">${esc((v.pastDates || []).map(fmtYYMMDD).join(', '))}</textarea>
+        </label>
         <fieldset style="margin-top:.4rem">
           <legend>🎖 마일리지 1~5차 (24~120회) 기준일 · 건의일</legend>
           <p class="hint" style="margin:0 0 .5rem">예: 26-02-01 또는 달력 선택 → 표에는 <b>26.02.01</b> 형식으로 표시됩니다.</p>
@@ -809,13 +812,22 @@ const Admin = {
         proposedDate: $(`[data-slot-prop="${st}"]`, w).value,
       }));
       const normSlots = Store.normalizeSlots(newSlots);
+      const pastRaw = $('#mf-past', w).value.trim();
+      const parsedPast = Store.parseDateList(pastRaw);
+      const bcInput = +$('#mf-bc', w).value || 0;
+      const origPastLen = Array.isArray(v.pastDates) ? v.pastDates.length : 0;
+      const finalPast = pastRaw ? parsedPast : (bcInput === 0 ? [] : (v.pastDates || []));
+      const finalBc = (pastRaw && parsedPast.length !== origPastLen && bcInput === (v.baseCount || 0))
+        ? parsedPast.length
+        : bcInput;
       const data = {
         ...this.parseUnit(uv),
         name: $('#mf-name', w).value.replace(/\s/g, ''),
         dischargeDate: $('#mf-dc', w).value,
-        baseCount: +$('#mf-bc', w).value || 0,
+        baseCount: finalBc,
         baseGrantedBlocks: normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0),
         baseLastDate: $('#mf-bl', w).value || null,
+        pastDates: finalPast,
         mileageSlots: normSlots,
       };
       if (m) {
@@ -828,18 +840,65 @@ const Admin = {
     };
   },
 
-  /** 출석 기록 보기 (readOnly: 전역자) - 클릭 없이 전체 사진이 한눈에 보이도록 대형 갤러리 창으로 표시 */
+  /** 24회 단위 회기별 출석 날짜표(10개씩 3줄) 공통 HTML */
+  renderBlockGridsHtml(tl, includeInProgress = true) {
+    if (!tl || !tl.length) return '';
+    const U = CONFIG.mileageUnit;
+    const maxStage = includeInProgress ? Math.ceil(tl.length / U) : Math.floor(tl.length / U);
+    const blocksHtml = [];
+    for (let s = 1; s <= maxStage && s <= 6; s++) {
+      const st = (s - 1) * U + 1;
+      const en = s * U;
+      const slice = tl.slice(st - 1, en);
+      if (!slice.length) continue;
+      const done = slice.length >= U;
+      const rows = Report.dateGridRows(slice, 10);
+      blocksHtml.push(`
+        <div style="margin-bottom:.5rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:.4rem .6rem">
+          <div style="font-weight:700;font-size:.8rem;color:#1e3a8a;margin-bottom:.2rem">${s}차 (${st}~${en}회) 출석 날짜 ${done ? '(달성 완료)' : `(진행 중 · ${slice.length}/${U}회)`}:</div>
+          <table style="width:100%;font-size:.78rem;border-collapse:collapse;text-align:center">
+            <tbody>
+              ${rows.map((row, ri) => `
+                <tr style="border-bottom:1px solid #e2e8f0">
+                  <th style="padding:.2rem .4rem;background:#f1f5f9;width:70px;white-space:nowrap">${st + ri * 10}~${st + ri * 10 + row.length - 1}회</th>
+                  ${row.map(d => `<td style="padding:.2rem .3rem;font-weight:600;${d === '00-00' ? 'color:#dc2626' : ''}">${d}</td>`).join('')}
+                  ${Array.from({ length: 10 - row.length }).map(() => '<td style="background:#f8fafc"></td>').join('')}
+                </tr>`).join('')}
+            </tbody>
+          </table>
+        </div>`);
+    }
+    return blocksHtml.join('');
+  },
+
+  /** 출석 기록 보기 (readOnly: 전역자) - 과거 타임라인(1~N회) + 시스템 인증 사진 전체 한눈에 보기 */
   async history(m, readOnly = false) {
     const atts = (m.atts || []).slice().sort((a, b) => b.ts - a.ts);
+    const tl = Store.timeline(m);
+    const gridsHtml = this.renderBlockGridsHtml(tl, true);
+    const chipsHtml = tl.length
+      ? tl.map((e, idx) => `<span style="${e.unknown ? 'background:#fee2e2;color:#b91c1c' : (e.att ? 'background:#dbeafe;color:#1e3a8a;font-weight:700' : '')}">${idx + 1}회 ${e.unknown ? '00.00.00' : `${fmtYYMMDD(e.date)}(${weekdayOf(e.date)})`}</span>`).join('')
+      : '<p class="muted">누적 출석 날짜가 없습니다.</p>';
+
     const w = Modal.open(`<h3>${esc(unitLabel(m))} ${esc(m.name)} · 출석 기록 전체보기</h3>
-      <p class="modal-msg small">누적 <b>${m.total}회</b> (사진촬영 전 ${m.baseCount || 0}회 + 시스템 기록 ${atts.length}회) · 전역일 ${m.dischargeDate}</p>
+      <p class="modal-msg small">누적 <b>${m.total}회</b> (사진촬영 전 ${m.baseCount || 0}회 + 시스템 기록 ${atts.length}회) · 전역일 ${fmtYYMMDD(m.dischargeDate)}</p>
+      ${gridsHtml ? `
+        <details open style="margin-bottom:.8rem">
+          <summary style="cursor:pointer;font-weight:700;color:var(--navy);font-size:.9rem">📅 24회 단위 회기별 출석 날짜표 (1회~${tl.length}회)</summary>
+          <div style="margin-top:.4rem">${gridsHtml}</div>
+        </details>` : ''}
+      <details style="margin-bottom:.9rem">
+        <summary style="cursor:pointer;font-weight:700;color:#334155;font-size:.88rem">📋 전체 출석일자 타임라인 (${tl.length}회 · 파란색=시스템 기록)</summary>
+        <div class="chips" style="margin-top:.4rem">${chipsHtml}</div>
+      </details>
+      <h4 style="margin:.4rem 0;color:var(--navy);font-size:.9rem">📸 시스템 사진·수동 인증 기록 (${atts.length}건)</h4>
       <div class="hist-grid">${atts.map(a => `<div class="hist-card hist-row" data-id="${a.id}">
         <div class="hist-card-head">
           <div class="hist-info"><b>${a.date} (${weekdayOf(a.date)}) ${a.time}</b>${a.manual ? ` <span class="badge">수동</span> <span class="muted">${esc(a.reason)}</span>` : ''}</div>
           ${readOnly ? '' : `<button class="btn small danger" data-del="${a.id}">삭제</button>`}
         </div>
         <div class="hist-th"></div>
-      </div>`).join('') || '<p class="muted">출석 기록이 없습니다.</p>'}</div>
+      </div>`).join('') || '<p class="muted">시스템 도입 이후 사진/수동 인증 출석 기록이 없습니다.</p>'}</div>
       <div class="modal-actions"><button class="btn primary" data-ok>닫기</button></div>`, 'xwide');
     w.querySelector('[data-ok]').onclick = () => Modal.close(w);
     for (const row of $$('.hist-row', w)) {
@@ -1162,37 +1221,12 @@ const Admin = {
         달성된 회차의 <b>언제부(예배 달성 기준일)</b>는 자동으로 채워지며 수정할 수 있습니다. <b>언제 건의신청(부대 건의일)</b>을 확인 후 저장해 주세요.
       </p>
       ${(() => {
-        const tl = Store.timeline(r.m);
-        const earned = Math.floor(r.m.total / U);
-        if (!earned) return '';
-        const blocksHtml = [];
-        for (let s = 1; s <= earned && s <= 5; s++) {
-          const st = (s - 1) * U + 1;
-          const en = s * U;
-          const slice = tl.slice(st - 1, en);
-          if (!slice.length) continue;
-          const rows = Report.dateGridRows(slice, 10);
-          blocksHtml.push(`
-            <div style="margin-bottom:.5rem;background:#f8fafc;border:1px solid #e2e8f0;border-radius:6px;padding:.4rem .6rem">
-              <div style="font-weight:700;font-size:.8rem;color:#1e3a8a;margin-bottom:.2rem">${s}차 (${st}~${en}회) 출석 날짜 (월-일):</div>
-              <table style="width:100%;font-size:.78rem;border-collapse:collapse;text-align:center">
-                <tbody>
-                  ${rows.map((row, ri) => `
-                    <tr style="border-bottom:1px solid #e2e8f0">
-                      <th style="padding:.2rem .4rem;background:#f1f5f9;width:70px;white-space:nowrap">${st + ri*10}~${st + ri*10 + row.length - 1}회</th>
-                      ${row.map(d => `<td style="padding:.2rem .3rem;font-weight:600">${d}</td>`).join('')}
-                      ${Array.from({ length: 10 - row.length }).map(() => '<td style="background:#f8fafc"></td>').join('')}
-                    </tr>
-                  `).join('')}
-                </tbody>
-              </table>
-            </div>
-          `);
-        }
+        const gridsHtml = this.renderBlockGridsHtml(Store.timeline(r.m), true);
+        if (!gridsHtml) return '';
         return `
           <details style="margin-bottom:.8rem" open>
             <summary style="cursor:pointer;font-weight:700;color:var(--navy);font-size:.85rem">📅 24회 단위 회기별 출석 날짜표 (10개씩 3줄)</summary>
-            <div style="margin-top:.4rem">${blocksHtml.join('')}</div>
+            <div style="margin-top:.4rem">${gridsHtml}</div>
           </details>
         `;
       })()}

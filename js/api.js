@@ -293,7 +293,7 @@ const Backend = {
       for (const d of data.discharged || []) await DB.put('discharged', d);
       for (const w of data.warnings || []) await DB.put('warnings', w);
       if (typeof Store !== 'undefined' && Store.ensureHistorySeeded) {
-        await Store.ensureHistorySeeded();
+        await Store.ensureHistorySeeded(true);
       }
       return true;
     } catch (e) {
@@ -427,7 +427,7 @@ const Backend = {
     for (const d of data.discharged || []) await DB.put('discharged', d);
     for (const w of data.warnings || []) await DB.put('warnings', w);
     if (typeof Store !== 'undefined' && Store.ensureHistorySeeded) {
-      await Store.ensureHistorySeeded();
+      await Store.ensureHistorySeeded(true);
     }
 
     const needPhotos = (data.attendance || []).filter(a => a.hasPhoto);

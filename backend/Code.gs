@@ -207,7 +207,7 @@ function handleAction(action, p, authPw) {
       return { id: p.member.id };
 
     case 'upsertMembersBatch':
-      (p.members || []).forEach(m => upsertRow('members', m));
+      upsertRowsBatch('members', p.members || []);
       bumpSyncRev();
       return { count: (p.members || []).length };
 
@@ -405,6 +405,40 @@ function upsertRow(sheetName, obj) {
     sh.getRange(r, 1, 1, headers.length).setValues([rowData]);
   } else {
     sh.appendRow(rowData);
+  }
+}
+
+function upsertRowsBatch(sheetName, list) {
+  if (!list || !list.length) return;
+  const ss = getOrCreateDb();
+  const sh = ss.getSheetByName(sheetName);
+  const headers = SHEET_DEFS[sheetName];
+  const lastRow = sh.getLastRow();
+  const rowMap = {};
+  if (lastRow > 1) {
+    const ids = sh.getRange(2, 1, lastRow - 1, 1).getValues();
+    for (let i = 0; i < ids.length; i++) {
+      if (ids[i][0]) rowMap[String(ids[i][0])] = i + 2;
+    }
+  }
+  const toAppend = [];
+  list.forEach(obj => {
+    if (!obj || !obj.id) return;
+    const rowData = headers.map(h => {
+      if (h === 'json') return JSON.stringify(obj);
+      const v = obj[h];
+      return v === undefined || v === null ? '' : v;
+    });
+    const r = rowMap[String(obj.id)];
+    if (r > 0) {
+      sh.getRange(r, 1, 1, headers.length).setValues([rowData]);
+    } else {
+      toAppend.push(rowData);
+    }
+  });
+  if (toAppend.length) {
+    const startRow = Math.max(2, sh.getLastRow() + 1);
+    sh.getRange(startRow, 1, toAppend.length, headers.length).setValues(toAppend);
   }
 }
 

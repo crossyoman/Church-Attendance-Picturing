@@ -60,7 +60,7 @@ const Report = {
         achievers.push({
           person: p, milestone: hi, total: c1, block, blockDates,
           missing: U - block.length,
-          allDates: atts.map(a => a.date),
+          allDates: Store.timeline(p, atts).map(e => (e.unknown ? '00.00.00' : `${e.date}(${weekdayOf(e.date)})`)),
           grantedBlocks, earnedBlocks: k1, pendingBlocks: Math.max(0, k1 - grantedBlocks),
         });
       }
