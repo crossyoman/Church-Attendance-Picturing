@@ -1529,18 +1529,22 @@ const Admin = {
       </div>
     `;
 
-    const makeFile = async () => {
-      return await this.buildFullAttendanceExcelFile();
+    // 모바일 브라우저의 사용자 제스처(User Activation) 보존을 위해 화면 진입 시 엑셀 파일을 미리 생성
+    let cachedFile = null;
+    const preloadPromise = this.buildFullAttendanceExcelFile().then(f => {
+      cachedFile = f;
+      return f;
+    }).catch(() => null);
+
+    const getFileAsync = async () => {
+      if (cachedFile) return cachedFile;
+      await preloadPromise;
+      if (cachedFile) return cachedFile;
+      cachedFile = await this.buildFullAttendanceExcelFile();
+      return cachedFile;
     };
 
-    $('#btn-export-dl', body).onclick = async () => {
-      const f = await makeFile();
-      if (!f) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
-      downloadBlob(f, f.name);
-    };
-
-    $('#btn-export-mail', body).onclick = async () => {
-      const f = await makeFile();
+    const sendWithFile = (f) => {
       if (!f) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
       const title = `[${CONFIG.churchName}] 전체 인원 출석기록 및 마일리지 종합 현황 (${todayStr()})`;
       const text = `[${CONFIG.churchName} 전체 인원 출석기록 및 마일리지 종합 현황]
@@ -1554,6 +1558,21 @@ const Admin = {
 4) 시스템_사진인증_출석기록 시트 (시스템 상세 출석 로그)`;
       shareReport(title, text, [f], [f]);
     };
+
+    $('#btn-export-dl', body).onclick = () => {
+      if (cachedFile) return downloadBlob(cachedFile, cachedFile.name);
+      getFileAsync().then(f => {
+        if (!f) return Modal.alert('엑셀 파일을 생성하지 못했습니다.');
+        downloadBlob(f, f.name);
+      });
+    };
+
+    $('#btn-export-mail', body).onclick = () => {
+      if (cachedFile) return sendWithFile(cachedFile);
+      getFileAsync().then(sendWithFile);
+    };
+
+    await preloadPromise;
   },
 
   /** 전체 인원 출석기록 + 마일리지 통합 엑셀 파일 생성 */

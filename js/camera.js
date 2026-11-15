@@ -180,6 +180,119 @@ async function downloadFiles(files) {
 }
 
 /**
+ * 메일/공유 본문용 안전한 텍스트 생성 (URL 길이 초과 Error 400 및 모바일 인텐트 제한 방지)
+ * - encodeURIComponent 길이와 문자 길이가 모두 한도 이하이면 원문 그대로 반환
+ * - 초과 시 앞부분 요약만 남기고 클립보드 붙여넣기 안내 문구를 붙여 반환
+ */
+function buildSafeEmailBody(text, maxEncodedLen = 1600, maxCharLen = 1500) {
+  const raw = String(text || '');
+  if (encodeURIComponent(raw).length <= maxEncodedLen && raw.length <= maxCharLen) return raw;
+
+  const fullNotice = [
+    '',
+    '...(이하 상세 명단 및 통계 생략)...',
+    '',
+    '--------------------',
+    '📋 [안내] 전체 상세 출석 명단 및 통계 본문은 클립보드에 자동 복사되었습니다.',
+    '👉 메일 본문에서 붙여넣기(Ctrl+V 또는 길게 눌러 붙여넣기) 해주세요.',
+    '📎 방금 다운로드된 엑셀/사진 파일을 첨부해 주세요!',
+    '--------------------',
+  ].join('\n');
+
+  const shortNotice = '\n\n...(상세 내용 생략 - 전체 본문이 클립보드에 복사되었습니다. 붙여넣기 Ctrl+V 해주세요)...';
+  const notice = (
+    encodeURIComponent(fullNotice).length <= maxEncodedLen - 120 &&
+    fullNotice.length <= maxCharLen - 80
+  ) ? fullNotice : shortNotice;
+
+  const encodedBudget = maxEncodedLen - encodeURIComponent(notice).length;
+  const charBudget = maxCharLen - notice.length;
+  if (encodedBudget <= 0 || charBudget <= 0) return notice.trimStart();
+
+  const kept = [];
+  for (const line of raw.split('\n')) {
+    const candidate = kept.length ? `${kept.join('\n')}\n${line}` : line;
+    if (candidate.length > charBudget || encodeURIComponent(candidate).length > encodedBudget) break;
+    kept.push(line);
+  }
+  return (kept.length ? kept.join('\n') : '') + notice;
+}
+
+/** 클립보드 복사 (Clipboard API 우선, 실패 시 textarea 폴백) */
+async function copyReportText(text) {
+  const raw = String(text || '');
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      await navigator.clipboard.writeText(raw);
+      return true;
+    }
+  } catch (e) {}
+  try {
+    const ta = document.createElement('textarea');
+    ta.value = raw;
+    ta.setAttribute('readonly', '');
+    ta.style.cssText = 'position:fixed;left:-9999px;top:0;opacity:0';
+    document.body.appendChild(ta);
+    ta.select();
+    const ok = document.execCommand('copy');
+    ta.remove();
+    return ok;
+  } catch (e) {
+    return false;
+  }
+}
+
+/** await 없이 클립보드 복사만 시작 (모바일 navigator.share / window.open 제스처 보존용) */
+function triggerAsyncClipboardCopy(text) {
+  try {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      navigator.clipboard.writeText(String(text || '')).catch(() => {});
+    }
+  } catch (e) {}
+}
+
+/** 모바일 기본 공유창 다단계 호출 (1차: 파일+본문, 2차: 파일만, 3차: 본문만) */
+async function tryMobileShare(title, mobileText, validFiles, dlList) {
+  if (typeof navigator.share !== 'function') return 'failed';
+
+  const canShareFiles = validFiles.length > 0 && (!navigator.canShare || (() => {
+    try { return navigator.canShare({ files: validFiles }); } catch (e) { return false; }
+  })());
+
+  if (canShareFiles) {
+    try {
+      await navigator.share({ title, text: mobileText, files: validFiles });
+      return 'shared';
+    } catch (e1) {
+      if (e1 && e1.name === 'AbortError') return 'abort';
+      if (e1 && e1.name === 'NotAllowedError') return 'needs_gesture';
+      console.warn('[shareReport file+text failed]', e1);
+      try {
+        await navigator.share({ title, files: validFiles });
+        return 'shared';
+      } catch (e2) {
+        if (e2 && e2.name === 'AbortError') return 'abort';
+        if (e2 && e2.name === 'NotAllowedError') return 'needs_gesture';
+        console.warn('[shareReport files-only failed]', e2);
+      }
+    }
+  }
+
+  try {
+    await navigator.share({ title, text: mobileText });
+    if (validFiles.length && dlList.length) {
+      await downloadFiles(dlList);
+    }
+    return 'shared';
+  } catch (e3) {
+    if (e3 && e3.name === 'AbortError') return 'abort';
+    if (e3 && e3.name === 'NotAllowedError') return 'needs_gesture';
+    console.warn('[shareReport text-only failed]', e3);
+    return 'failed';
+  }
+}
+
+/**
  * 기기 공유창(안드로이드 Gmail 앱 등) 또는 데스크탑 Gmail 웹으로 메일 발송
  * - 파일명에 공백이나 특수문자가 있으면 안드로이드 WebShare 임시 파일 URI 생성 시 깨져서
  *   Gmail에 빈 메일로 열리는 버그가 있으므로 파일명을 안전한 문자(언더바)로 정규화.
@@ -192,32 +305,25 @@ async function shareReport(title, text, files = [], extraDownloadFiles = []) {
     return cleanName === f.name ? f : new File([f], cleanName, { type: f.type });
   });
 
-  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
-
-  if (isMobile && typeof navigator.share === 'function') {
-    try {
-      // 클립보드에도 본문을 미리 복사해 두어 만일의 경우 바로 붙여넣기 가능하게 보장
-      try { await navigator.clipboard.writeText(text); } catch (e) {}
-
-      if (validFiles.length && (!navigator.canShare || navigator.canShare({ files: validFiles }))) {
-        await navigator.share({ title, text, files: validFiles });
-        return true;
-      } else {
-        await navigator.share({ title, text });
-        return true;
-      }
-    } catch (e) {
-      if (e && e.name === 'AbortError') return false;
-      console.warn('[shareReport error]', e);
-    }
-  }
-
-  // 데스크탑 PC 브라우저이거나 모바일 공유가 지원되지 않는 경우:
-  // 본문 복사 + 파일 자동 다운로드 + Gmail 웹 작성창(또는 기본 메일앱) 오픈
-  try { await navigator.clipboard.writeText(text); } catch (e) {}
   const dlList = (extraDownloadFiles && extraDownloadFiles.length)
     ? extraDownloadFiles.filter(Boolean)
     : validFiles;
+
+  const isMobile = /Android|iPhone|iPad|iPod/i.test(navigator.userAgent || '');
+  const mobileText = buildSafeEmailBody(text, 4500, 1500);
+  let mobileResult = 'failed';
+
+  if (isMobile && typeof navigator.share === 'function') {
+    // 사용자 제스처(Transient Activation) 보존을 위해 await 없이 클립보드 복사를 먼저 시작하고 즉시 공유 호출
+    triggerAsyncClipboardCopy(text);
+    mobileResult = await tryMobileShare(title, mobileText, validFiles, dlList);
+    if (mobileResult === 'shared') return true;
+    if (mobileResult === 'abort') return false;
+  }
+
+  // 데스크탑 PC 브라우저이거나 모바일 공유가 지원되지 않는(또는 제스처가 만료된) 경우:
+  // 전체 본문 복사 + 길이 안전 Gmail 웹 작성창 오픈 + 파일 다운로드
+  await copyReportText(text);
 
   let adminEmail = (typeof CONFIG !== 'undefined' && CONFIG.defaultAdminEmail) ? CONFIG.defaultAdminEmail : 'crossyoman@gmail.com';
   try {
@@ -227,18 +333,41 @@ async function shareReport(title, text, files = [], extraDownloadFiles = []) {
     }
   } catch (e) {}
 
+  const baseGmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(adminEmail)}&su=${encodeURIComponent(title)}&body=`;
+  const maxBodyEncoded = Math.max(800, 1900 - baseGmailUrl.length);
+  const safeBody = buildSafeEmailBody(text, Math.min(1600, maxBodyEncoded), 1500);
+  const gmailUrl = baseGmailUrl + encodeURIComponent(safeBody);
+  const isTruncated = safeBody !== String(text || '');
+
+  const fileNoticeHtml = dlList.length
+    ? `<b>출석 엑셀/사진 파일(${dlList.length}개)을 자동 다운로드</b>하고 `
+    : '';
+  const bodyNotice = isTruncated
+    ? '전체 본문이 길어 메일 창에는 요약본만 먼저 채워집니다. 열린 메일 본문에서 <b>붙여넣기(Ctrl+V)</b>를 하고 다운로드된 파일을 첨부해 주세요.'
+    : '수신자·제목·본문이 자동으로 채워진 상태로 열리며, 방금 다운로드된 엑셀/사진 파일만 첨부하시면 됩니다.';
+
   const openGmail = await Modal.confirm(
-    `<b>출석 엑셀 및 달성자 사진 파일(${dlList.length}개)을 자동 다운로드</b>하고 <b>메일 본문을 클립보드에 복사</b>합니다.<br><br>` +
-    `지금 바로 <b>Gmail 메일 쓰기 창</b>을 열까요?<br>` +
-    `<span class="muted">(수신자·제목·본문이 자동으로 채워진 상태로 열리며, 방금 다운로드된 엑셀/사진 파일만 첨부하시면 됩니다.)</span>`,
-    '📧 Gmail 메일창 열기 + 파일 다운로드',
-    '💾 파일만 다운로드'
+    `${fileNoticeHtml}<b>전체 메일 본문을 클립보드에 복사</b>했습니다.<br><br>` +
+    `지금 바로 <b>${isMobile ? '메일 앱(공유) 또는 Gmail' : 'Gmail 메일 쓰기 창'}</b>을 열까요?<br>` +
+    `<span class="muted">(${bodyNotice})</span>`,
+    isMobile ? '📧 메일 보내기 + 파일 준비' : '📧 Gmail 메일창 열기 + 파일 다운로드',
+    dlList.length ? '💾 파일만 다운로드' : '닫기'
   );
 
   if (openGmail) {
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&fs=1&to=${encodeURIComponent(adminEmail)}&su=${encodeURIComponent(title)}&body=${encodeURIComponent(text)}`;
+    triggerAsyncClipboardCopy(text);
+    if (isMobile && mobileResult === 'needs_gesture' && typeof navigator.share === 'function') {
+      const retryResult = await tryMobileShare(title, mobileText, validFiles, dlList);
+      if (retryResult === 'shared') return true;
+      if (retryResult === 'abort') return false;
+    }
     window.open(gmailUrl, '_blank', 'noopener');
+  } else {
+    await copyReportText(text);
   }
-  await downloadFiles(dlList);
+
+  if (dlList.length) {
+    await downloadFiles(dlList);
+  }
   return false;
 }
