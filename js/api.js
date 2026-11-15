@@ -292,6 +292,9 @@ const Backend = {
       }
       for (const d of data.discharged || []) await DB.put('discharged', d);
       for (const w of data.warnings || []) await DB.put('warnings', w);
+      if (typeof Store !== 'undefined' && Store.ensureHistorySeeded) {
+        await Store.ensureHistorySeeded();
+      }
       return true;
     } catch (e) {
       console.warn('[Backend.syncFromServerIfChanged]', e);
@@ -423,6 +426,9 @@ const Backend = {
     for (const g of data.mileage || []) await DB.put('mileage', g);
     for (const d of data.discharged || []) await DB.put('discharged', d);
     for (const w of data.warnings || []) await DB.put('warnings', w);
+    if (typeof Store !== 'undefined' && Store.ensureHistorySeeded) {
+      await Store.ensureHistorySeeded();
+    }
 
     const needPhotos = (data.attendance || []).filter(a => a.hasPhoto);
     for (let i = 0; i < needPhotos.length; i++) {

@@ -54,6 +54,7 @@ const App = {
     if ('serviceWorker' in navigator && location.protocol.startsWith('http')) {
       navigator.serviceWorker.register('sw.js').catch(() => { });
     }
+    try { await Store.ensureHistorySeeded(); } catch (e) { console.error(e); }
     this.home();
     if (typeof Backend !== 'undefined') Backend.init().catch(() => { });
   },

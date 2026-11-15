@@ -1239,6 +1239,48 @@ const Admin = {
     };
   },
 
+  normalizeUnitAndCompany(rawUnit, rawCompany = '') {
+    let unit = String(rawUnit || '').trim();
+    let company = String(rawCompany || '').trim() || null;
+    if (unit === '8단본부') unit = '단본부';
+    if (unit === '8단통신') unit = '단통신';
+    if (unit === '608수송대대' && company) {
+      const map608 = { '본부중대': '608본부', '중형중대': '608중형', '버스중대': '608버스', '대형중대': '608대형' };
+      if (map608[company]) { unit = map608[company]; company = null; }
+    }
+    if (unit === '18보급대대') company = null;
+    const unitObj = CONFIG.units.find(x => x.name === unit);
+    return { unit, company: unitObj && unitObj.companies ? company : null, unitObj };
+  },
+
+  extractSeqDateCols(H) {
+    const firstSeqCol = H.findIndex(h => /^1\s*회$/.test(h));
+    if (firstSeqCol < 0) return [];
+    const cols = [];
+    for (let i = firstSeqCol; i < H.length; i++) {
+      const m = String(H[i] || '').trim().match(/^(\d+)\s*회$/);
+      if (m) cols.push({ idx: i, seq: +m[1] });
+    }
+    return cols.sort((a, b) => a.seq - b.seq);
+  },
+
+  parseSeqDateRow(row, seqCols) {
+    const dates = [];
+    for (const c of seqCols) {
+      const v = row[c.idx];
+      if (v === '' || v === null || v === undefined) continue;
+      const s = String(v).trim();
+      if (!s || s === '-') continue;
+      if (/^0{2,4}[.\-\/]0{1,2}[.\-\/]0{1,2}$/.test(s)) {
+        dates.push(UNKNOWN_DATE);
+      } else {
+        const d = normalizeDate(v);
+        if (d) dates.push(d);
+      }
+    }
+    return dates;
+  },
+
   /* ===================== 엑셀 일괄 등록 (1~5차 기준일·건의일 지원) ===================== */
   async tab_import(body) {
     body.innerHTML = `
@@ -1255,7 +1297,7 @@ const Admin = {
         <div style="padding:.8rem 1rem;background:#ecfdf5;border:1.5px solid #6ee7b7;border-radius:10px">
           <div style="font-weight:700;color:#065f46;margin-bottom:.3rem">📅 지난 1년간 예배 출석이력(타임라인) 엑셀 일괄 등록</div>
           <p class="muted" style="margin:0 0 .5rem;font-size:.82rem;color:#047857">
-            사진 판독 결과로 생성된 <code>출석이력_정리_25.10-26.11.xlsx</code> 파일을 선택하면, 인원별로 1회부터 최종 누적까지의 출석 날짜(00.00.00 포함)를 데이터베이스에 일괄 저장합니다.
+            사진 판독 결과로 생성된 <code>출석이력_정리_25.10-26.11.xlsx</code> 또는 <code>천군교회_전체인원_출석기록_및_마일리지현황_v3.xlsx</code> 파일을 선택하면, 인원별로 1회부터 최종 누적까지의 출석 날짜(00.00.00 포함)를 데이터베이스에 일괄 저장합니다.
           </p>
           <label class="file-btn btn primary" style="background:#059669">
             📂 출석이력 엑셀 선택 및 일괄 저장<input type="file" id="xf-timeline" accept=".xlsx,.xls" hidden>
@@ -1267,29 +1309,44 @@ const Admin = {
       if (typeof XLSX === 'undefined') return Modal.alert('엑셀 읽기 도구를 불러오지 못했어요.');
       try {
         const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
-        const ws = wb.Sheets['출석이력(앱등록용)'] || wb.Sheets[wb.SheetNames[0]];
+        const sheetName =
+          wb.SheetNames.find(n => n.includes('앱반영') || n.includes('앱등록')) ||
+          wb.SheetNames.find(n => n.includes('출석이력')) ||
+          wb.SheetNames.find(n => n.includes('전체인원 출석기록')) ||
+          wb.SheetNames.find(n => n.includes('전체출석타임라인') || n.includes('인원별 출석일표') || n.includes('타임라인')) ||
+          wb.SheetNames[0];
+        const ws = wb.Sheets[sheetName];
         const aoa = XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' });
-        const hi = aoa.findIndex(r => r.some(c => String(c).includes('이름')));
-        if (hi < 0) return Modal.alert('‘이름’ 열을 찾지 못했어요.');
+        let hi = aoa.findIndex(r => r.some(c => /소속|부대/.test(String(c))) && r.some(c => /이름|성명/.test(String(c))));
+        if (hi < 0) hi = aoa.findIndex(r => r.some(c => /이름|성명/.test(String(c))));
+        if (hi < 0) return Modal.alert('‘이름/성명’ 열을 찾지 못했어요.');
         const H = aoa[hi].map(c => String(c).trim());
+        const H2 = (aoa[hi + 1] || []).map(c => String(c).trim());
         const uCol = H.findIndex(c => c.includes('소속') || c.includes('부대'));
-        const nCol = H.findIndex(c => c.includes('이름'));
+        const cCol = H.findIndex(c => c.includes('중대'));
+        const nCol = H.findIndex(c => c.includes('이름') || c.includes('성명'));
         const dCol = H.findIndex(c => c.includes('전역'));
         const lCol = H.findIndex(c => c.includes('출석일자') || c.includes('목록'));
-        if (uCol < 0 || nCol < 0 || lCol < 0) return Modal.alert('필수 열(소속, 이름, 출석일자 목록)을 찾지 못했어요.');
+        const seqCols = this.extractSeqDateCols(H);
+        if (uCol < 0 || nCol < 0 || (lCol < 0 && !seqCols.length)) {
+          return Modal.alert('필수 열(소속, 이름/성명, 출석일자 목록 또는 1회~회차 열)을 찾지 못했어요.');
+        }
 
+        const hasSubHeader = !String(H2[nCol] || '').trim() && H2.some(c => c.includes('기준일') || c.includes('건의일'));
+        const dataStart = hasSubHeader ? hi + 2 : hi + 1;
         const batch = [];
-        aoa.slice(hi + 1).forEach(r => {
+        aoa.slice(dataStart).forEach(r => {
           const name = String(r[nCol] || '').replace(/\s/g, '');
           if (!name) return;
-          const unit = String(r[uCol] || '').trim();
-          const dischargeDate = normalizeDate(r[dCol]);
-          const datesStr = String(r[lCol] || '').trim();
-          const pastDates = Store.parseDateList(datesStr);
+          const { unit } = this.normalizeUnitAndCompany(r[uCol], cCol >= 0 ? r[cCol] : '');
+          const dischargeDate = dCol >= 0 ? normalizeDate(r[dCol]) : '';
+          const pastDates = lCol >= 0
+            ? Store.parseDateList(String(r[lCol] || '').trim())
+            : this.parseSeqDateRow(r, seqCols);
           batch.push({ unit, name, dischargeDate, pastDates });
         });
 
-        if (!await Modal.confirm(`엑셀에서 <b>${batch.length}명</b>의 출석이력 날짜 목록을 확인했습니다.<br>전체 형제의 과거 예배 출석이력으로 저장할까요?`, '출석이력 일괄 저장')) return;
+        if (!await Modal.confirm(`엑셀(${esc(sheetName)})에서 <b>${batch.length}명</b>의 출석이력 날짜 목록을 확인했습니다.<br>전체 형제의 과거 예배 출석이력으로 저장할까요?`, '출석이력 일괄 저장')) return;
         const res = await Store.applyPastDatesBatch(batch);
         await Modal.alert(`성공적으로 저장되었습니다!<br>· 업데이트 완료: <b>${res.updated}명</b><br>· 일치 인원 없음(건너뜀): ${res.missed}명`);
         this.open('mileage');
@@ -1303,27 +1360,30 @@ const Admin = {
       if (typeof XLSX === 'undefined') return Modal.alert('엑셀 읽기 도구를 불러오지 못했어요. 인터넷 연결을 확인해 주세요.');
       try {
         const wb = XLSX.read(await f.arrayBuffer(), { cellDates: true });
-        const ws = wb.Sheets['명단'] || wb.Sheets[wb.SheetNames[0]];
+        const ws = wb.Sheets['명단'] || wb.Sheets['전체인원 출석기록'] || wb.Sheets['전체인원_마일리지및출석현황'] || wb.Sheets[wb.SheetNames[0]];
         this.previewImport(XLSX.utils.sheet_to_json(ws, { header: 1, raw: true, defval: '' }));
       } catch (err) { Modal.alert('파일을 읽지 못했어요: ' + esc(err.message)); }
     };
   },
 
   async previewImport(aoa) {
-    const hi = aoa.findIndex(r => r.some(c => String(c).includes('이름')));
+    let hi = aoa.findIndex(r => r.some(c => /소속|부대/.test(String(c))) && r.some(c => /이름|성명/.test(String(c))));
+    if (hi < 0) hi = aoa.findIndex(r => r.some(c => /이름|성명/.test(String(c))));
     if (hi < 0) return Modal.alert('‘이름’ 열을 찾지 못했어요. 양식을 사용해 주세요.');
     const H1 = aoa[hi].map(c => String(c).trim());
     const H2 = (aoa[hi + 1] || []).map(c => String(c).trim());
     const col = kw => H1.findIndex(h => h.includes(kw));
     const C = {
-      unit: col('소속'),
+      unit: col('소속') >= 0 ? col('소속') : col('부대'),
       company: col('중대'),
-      name: col('이름'),
+      name: col('이름') >= 0 ? col('이름') : col('성명'),
       dc: col('전역'),
       bc: col('누적') >= 0 ? col('누적') : col('출석횟수'),
       bg: col('마일리지'),
-      bl: col('마지막'),
+      bl: col('마지막') >= 0 ? col('마지막') : col('최근'),
     };
+    const seqCols = this.extractSeqDateCols(H1);
+    const H1Mil = H1.slice(0, seqCols.length ? seqCols[0].idx : H1.length);
 
     // 2행 헤더(24회/48회/72회/96회/120회 아래 기준일/건의일) 여부 판별
     const hasSubHeader = !String(H2[C.name] || '').trim() && H2.some(c => c.includes('기준일') || c.includes('건의일'));
@@ -1335,14 +1395,14 @@ const Admin = {
       const target = st * 24;
       let baseCol = -1, propCol = -1;
       if (hasSubHeader) {
-        const topIdx = H1.findIndex(h => h.includes(String(target)) || h.includes(`${st}차`));
+        const topIdx = H1Mil.findIndex(h => h.includes(String(target)) || h.includes(`${st}차`));
         if (topIdx >= 0) {
           baseCol = topIdx;
           propCol = topIdx + 1;
         }
       } else {
-        baseCol = H1.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('기준'));
-        propCol = H1.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('건의'));
+        baseCol = H1Mil.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('기준'));
+        propCol = H1Mil.findIndex(h => (h.includes(String(target)) || h.includes(`${st}차`)) && h.includes('건의'));
       }
       stageCols[st] = { baseCol, propCol };
     });
@@ -1356,15 +1416,7 @@ const Admin = {
       const get = k => (C[k] >= 0 ? r[C[k]] : '');
       const name = String(get('name')).replace(/\s/g, '');
       if (!name) return;
-      let unit = String(get('unit')).trim(), company = String(get('company')).trim() || null;
-      if (unit === '8단본부') unit = '단본부';
-      if (unit === '8단통신') unit = '단통신';
-      if (unit === '608수송대대' && company) {
-        const map608 = { '본부중대': '608본부', '중형중대': '608중형', '버스중대': '608버스', '대형중대': '608대형' };
-        if (map608[company]) { unit = map608[company]; company = null; }
-      }
-      if (unit === '18보급대대') company = null;
-      const u = CONFIG.units.find(x => x.name === unit);
+      const { unit, company, unitObj: u } = this.normalizeUnitAndCompany(get('unit'), get('company'));
 
       const mileageSlots = [1, 2, 3, 4, 5].map(st => {
         const { baseCol, propCol } = stageCols[st];
@@ -1373,17 +1425,19 @@ const Admin = {
         return { stage: st, count: st * 24, baseDate: bDate, proposedDate: pDate };
       });
       const slotBlocks = mileageSlots.filter(sl => sl.baseDate || sl.proposedDate).length;
+      const pastDates = seqCols.length ? this.parseSeqDateRow(r, seqCols) : undefined;
 
       const rec = {
         line: dataStartIdx + i + 1,
         name,
         unit,
-        company: u && u.companies ? company : null,
+        company,
         dischargeDate: normalizeDate(get('dc')),
-        baseCount: parseInt(get('bc')) || 0,
+        baseCount: parseInt(get('bc')) || (pastDates ? pastDates.length : 0),
         baseGrantedBlocks: Math.max(parseInt(get('bg')) || 0, slotBlocks),
         baseLastDate: normalizeDate(get('bl')) || null,
         mileageSlots,
+        ...(pastDates ? { pastDates } : {}),
       };
       const key = `${rec.unit}|${rec.company || ''}|${rec.name}|${rec.dischargeDate}`;
       let err = '';
@@ -1450,6 +1504,8 @@ const Admin = {
 
     $('#xgo').onclick = async () => {
       await Store.addMembersBatch(ok);
+      const withTimeline = ok.filter(r => Array.isArray(r.pastDates) && r.pastDates.length);
+      if (withTimeline.length) await Store.applyPastDatesBatch(withTimeline);
       await Modal.alert(`총 ${ok.length}명(신규 ${newCnt}명, 업데이트 ${updCnt}명)의 명단 및 마일리지 기록을 반영했습니다.`);
       this.open('mileage');
     };

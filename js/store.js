@@ -67,16 +67,47 @@ function parseDateList(v) {
 
 /** 날짜를 26.02.01 (YY.MM.DD) 형식으로 표기 */
 function fmtYYMMDD(v) {
+  if (String(v || '').startsWith('0000')) return '00.00.00';
   const s = normalizeDate(v);
   if (!s) return '';
   const [y, m, d] = s.split('-');
   return `${y.slice(-2)}.${m}.${d}`;
 }
 
+const HISTORY_SEED_REV = 2026111501;
+
+/** 앱 출석 기록(m.atts)과 겹치는 날짜를 과거 출석일자 목록에서 1회씩 제외해 중복 합산을 방지 */
+function dedupePastDates(seedDates, atts) {
+  const dates = Array.isArray(seedDates) ? seedDates.slice() : [];
+  const sortedAtts = (atts || []).slice().sort((a, b) => (a.ts || 0) - (b.ts || 0));
+  for (const a of sortedAtts) {
+    if (!a || !a.date) continue;
+    const idx = dates.lastIndexOf(a.date);
+    if (idx >= 0) dates.splice(idx, 1);
+  }
+  return dates;
+}
+
+function seedSlotsToObjects(rawSlots) {
+  const U = CONFIG.mileageUnit;
+  const arr = Array.isArray(rawSlots) ? rawSlots : [];
+  const out = [];
+  for (let s = 1; s <= 5; s++) {
+    const baseDate = normalizeDate(arr[(s - 1) * 2] || '');
+    const proposedDate = normalizeDate(arr[(s - 1) * 2 + 1] || '');
+    if (baseDate || proposedDate) {
+      out.push({ stage: s, count: s * U, baseDate, proposedDate, memo: `${s}차(${s * U}회)` });
+    }
+  }
+  return out;
+}
+
 /* =========================================================
  * Store : 데이터 처리 (로컬 IndexedDB + 백엔드 자동 동기화)
  * ========================================================= */
 const Store = {
+  parseDateList,
+  _seedingPromise: null,
   /** 서버에서 백엔드 비밀번호를 요구하는 작업(삭제·설정 변경) 전에 인증 확인 */
   async needBackendAuth() {
     if (typeof Backend === 'undefined' || !(await Backend.isConfigured())) return;
@@ -449,26 +480,176 @@ const Store = {
     ];
   },
 
-  /** 출석이력 엑셀 반영: [{unit, name, dates:[...]}] → 형제별 pastDates 저장 */
+  /** 출석이력 엑셀 반영: [{unit, name, dates/pastDates:[...], dc/dischargeDate}] → 형제별 pastDates·baseCount 저장 */
   async applyPastDatesBatch(list) {
-    const ms = await DB.all('members');
-    const res = { applied: 0, missing: [], ambiguous: [], countDiff: [] };
+    const [ms, allAtts] = await Promise.all([DB.all('members'), DB.all('attendance')]);
+    const attByMember = {};
+    allAtts.forEach(a => (attByMember[a.memberId] = attByMember[a.memberId] || []).push(a));
+    const res = { applied: 0, updated: 0, missing: [], missed: 0, ambiguous: [], countDiff: [] };
     const changed = [];
     for (const it of list) {
-      const hit = ms.filter(m => m.unit === it.unit && m.name === it.name && (!it.dc || !m.dischargeDate || m.dischargeDate === it.dc));
-      if (!hit.length) { res.missing.push(`${it.unit} ${it.name}`); continue; }
-      if (hit.length > 1) { res.ambiguous.push(`${it.unit} ${it.name}`); continue; }
+      const unit = String(it.unit || '').trim();
+      const name = String(it.name || '').replace(/\s/g, '');
+      const dc = normalizeDate(it.dc || it.dischargeDate || '');
+      let hit = ms.filter(m => m.unit === unit && m.name === name && (!dc || !m.dischargeDate || m.dischargeDate === dc));
+      if (!hit.length) {
+        const byUN = ms.filter(m => m.unit === unit && m.name === name);
+        if (byUN.length === 1) hit = byUN;
+      }
+      if (!hit.length) { res.missing.push(`${unit} ${name}`); continue; }
+      if (hit.length > 1) { res.ambiguous.push(`${unit} ${name}`); continue; }
       const m = hit[0];
-      m.pastDates = it.dates.slice();
-      if ((m.baseCount || 0) !== it.dates.length) res.countDiff.push(`${it.unit} ${it.name} (앱 ${m.baseCount || 0}회 / 엑셀 ${it.dates.length}회)`);
+      const rawDates = Array.isArray(it.dates) ? it.dates : (Array.isArray(it.pastDates) ? it.pastDates : []);
+      const pastDates = dedupePastDates(rawDates, attByMember[m.id]);
+      if ((m.baseCount || 0) !== pastDates.length) {
+        res.countDiff.push(`${unit} ${name} (기존 ${m.baseCount || 0}회 → 반영 ${pastDates.length}회)`);
+      }
+      m.pastDates = pastDates;
+      m.baseCount = pastDates.length;
+      const lastKnown = pastDates.filter(d => !isUnknownDate(d)).pop() || null;
+      if (lastKnown || m.baseCount === 0) m.baseLastDate = lastKnown;
       await DB.put('members', m);
       changed.push(m);
       res.applied++;
     }
+    res.updated = res.applied;
+    res.missed = res.missing.length;
     if (changed.length && typeof Backend !== 'undefined') {
       await Backend.enqueue('upsertMembersBatch', { members: changed });
     }
     return res;
+  },
+
+  /** 내장된 전체 출석이력·정정 내역(window.SEED_PEOPLE_HISTORY)을 로컬 DB에 자동 반영 */
+  async ensureHistorySeeded(force = false) {
+    if (this._seedingPromise) return this._seedingPromise;
+    this._seedingPromise = this._runHistorySeed(force).finally(() => { this._seedingPromise = null; });
+    return this._seedingPromise;
+  },
+
+  async _runHistorySeed(force = false) {
+    const seeds = (typeof window !== 'undefined' && Array.isArray(window.SEED_PEOPLE_HISTORY))
+      ? window.SEED_PEOPLE_HISTORY : [];
+    if (!seeds.length) return { seeded: false, created: 0, updated: 0 };
+
+    const [ms, allAtts, allGrants, rawSettings, disList] = await Promise.all([
+      DB.all('members'),
+      DB.all('attendance'),
+      DB.all('mileage'),
+      DB.get('settings', 'main'),
+      DB.all('discharged'),
+    ]);
+    const settings = rawSettings || {};
+    const seedByUN = Object.fromEntries(seeds.map(p => [`${p.unit}|${p.name}`, p]));
+
+    const hasEmptyPast = ms.some(m => {
+      const seed = seedByUN[`${m.unit}|${m.name}`];
+      return seed && seed.dates.length > 0 && (!Array.isArray(m.pastDates) || m.pastDates.length === 0);
+    });
+    if (!force && ms.length > 0 && settings.historySeedRev === HISTORY_SEED_REV && !hasEmptyPast) {
+      return { seeded: false, created: 0, updated: 0 };
+    }
+
+    // 새 브라우저/빈 DB인 경우 145명 초기 시드 적재 (서버 연결 시 pull 전 충돌 방지를 위해 큐에는 올리지 않음)
+    if (ms.length === 0 && disList.length === 0) {
+      let created = 0;
+      for (const seed of seeds) {
+        const seedSlots = seedSlotsToObjects(seed.slots);
+        await this.addMember({
+          unit: seed.unit,
+          name: seed.name,
+          dischargeDate: seed.dc,
+          baseCount: seed.dates.length,
+          baseLastDate: seed.last || null,
+          mileageSlots: seedSlots,
+          pastDates: seed.dates.slice(),
+        }, false);
+        created++;
+      }
+      settings.historySeedRev = HISTORY_SEED_REV;
+      await DB.put('settings', settings, 'main');
+      return { seeded: true, created, updated: 0 };
+    }
+
+    const attByMember = {};
+    allAtts.forEach(a => (attByMember[a.memberId] = attByMember[a.memberId] || []).push(a));
+    const grantsByMember = {};
+    allGrants.forEach(g => (grantsByMember[g.memberId] = grantsByMember[g.memberId] || []).push(g));
+
+    const changed = [];
+    for (const seed of seeds) {
+      const seedSlots = seedSlotsToObjects(seed.slots);
+      let hit = ms.filter(m => m.unit === seed.unit && m.name === seed.name && (!seed.dc || !m.dischargeDate || m.dischargeDate === seed.dc));
+      if (!hit.length) {
+        const byUN = ms.filter(m => m.unit === seed.unit && m.name === seed.name);
+        if (byUN.length === 1) hit = byUN;
+      }
+      if (!hit.length) {
+        // 전역자 보관함에 이미 이동된 경우에도 과거 출석일자가 비어 있으면 채워 둠
+        const dHit = disList.filter(d => d.unit === seed.unit && d.name === seed.name);
+        if (dHit.length === 1 && (!Array.isArray(dHit[0].pastDates) || !dHit[0].pastDates.length)) {
+          const d = dHit[0];
+          const nextPast = dedupePastDates(seed.dates, d.attendances);
+          d.pastDates = nextPast;
+          d.baseCount = nextPast.length;
+          d.baseLastDate = nextPast.filter(dt => !isUnknownDate(dt)).pop() || null;
+          await DB.put('discharged', d);
+        }
+        continue;
+      }
+      if (hit.length > 1) continue;
+
+      const ex = hit[0];
+      const mAtts = attByMember[ex.id] || [];
+      const mGrants = grantsByMember[ex.id] || [];
+      const nextPast = dedupePastDates(seed.dates, mAtts);
+      const nextBaseCount = nextPast.length;
+      const nextLastDate = nextPast.filter(d => !isUnknownDate(d)).pop() || null;
+
+      const curSlots = this.getMemberSlots(ex, mGrants);
+      const mergedSlots = this.normalizeSlots(curSlots.map(sl => {
+        const inc = seedSlots.find(x => +x.stage === sl.stage);
+        return {
+          stage: sl.stage,
+          count: sl.count,
+          baseDate: sl.baseDate || (inc && inc.baseDate) || '',
+          proposedDate: sl.proposedDate || (inc && inc.proposedDate) || '',
+          memo: sl.memo || (inc && inc.memo) || '',
+        };
+      }));
+      const prevNormSlots = this.normalizeSlots(ex.mileageSlots || []);
+      const prevEffective = this.normalizeSlots(curSlots);
+      const nextBlocks = Math.max(ex.baseGrantedBlocks || 0, mergedSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0));
+
+      const pastChanged = !Array.isArray(ex.pastDates) || ex.pastDates.length !== nextPast.length
+        || ex.pastDates.some((d, i) => d !== nextPast[i]);
+      const baseChanged = (ex.baseCount || 0) !== nextBaseCount;
+      const lastChanged = (ex.baseLastDate || null) !== nextLastDate;
+      const slotsFieldChanged = JSON.stringify(prevNormSlots) !== JSON.stringify(mergedSlots);
+      const effectiveChanged = JSON.stringify(prevEffective) !== JSON.stringify(mergedSlots);
+      const blocksChanged = (ex.baseGrantedBlocks || 0) !== nextBlocks;
+
+      if (pastChanged || baseChanged || lastChanged || slotsFieldChanged || effectiveChanged || blocksChanged) {
+        ex.pastDates = nextPast;
+        ex.baseCount = nextBaseCount;
+        ex.baseLastDate = nextLastDate;
+        ex.mileageSlots = mergedSlots;
+        ex.baseGrantedBlocks = nextBlocks;
+        await DB.put('members', ex);
+        if (effectiveChanged) {
+          await this.syncGrantsWithSlots(ex, mergedSlots, false);
+        }
+        changed.push(ex);
+      }
+    }
+
+    settings.historySeedRev = HISTORY_SEED_REV;
+    await DB.put('settings', settings, 'main');
+
+    if (changed.length && typeof Backend !== 'undefined' && (await Backend.isConfigured())) {
+      await Backend.enqueue('upsertMembersBatch', { members: changed });
+    }
+    return { seeded: true, created: 0, updated: changed.length };
   },
 
   /* ---------- 마일리지 (1~5차: 24/48/72/96/120회 기준일·건의일) ---------- */
