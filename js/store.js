@@ -7,6 +7,10 @@ const fmtTime = d => `${pad(d.getHours())}:${pad(d.getMinutes())}`;
 const todayStr = () => fmtDate(new Date());
 const WEEK = ['일', '월', '화', '수', '목', '금', '토'];
 const weekdayOf = s => WEEK[new Date(s + 'T00:00:00').getDay()];
+const worshipDayOf = dOrStr => {
+  const day = (dOrStr instanceof Date) ? dOrStr.getDay() : new Date(dOrStr + 'T00:00:00').getDay();
+  return day === 0 ? '주일' : `${WEEK[day]}요일`;
+};
 const dotDate = s => (s ? s.replace(/-/g, '.') : '');
 const shortDate = s => { const [, m, d] = s.split('-'); return `${+m}/${+d}(${weekdayOf(s)})`; };
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
@@ -157,7 +161,10 @@ const Store = {
     atts = (atts || []).slice().sort((a, b) => a.ts - b.ts);
     const total = (m.baseCount || 0) + atts.length;
     const lastSys = atts.length ? atts[atts.length - 1].date : null;
-    const last = [lastSys, m.baseLastDate].filter(Boolean).sort().pop() || null;
+    const lastPast = Array.isArray(m.pastDates)
+      ? m.pastDates.filter(d => !isUnknownDate(d)).sort().pop() || null
+      : null;
+    const last = [lastSys, m.baseLastDate, lastPast].filter(Boolean).sort().pop() || null;
     return { ...m, atts, total, last };
   },
 
@@ -175,6 +182,9 @@ const Store = {
   },
 
   isLongAbsent(m) {
+    if (!m || m.discharged) return false;
+    const today = todayStr();
+    if (m.dischargeDate && m.dischargeDate < today) return false;
     const ref = m.last || m.createdAt;
     if (!ref) return false;
     const cut = new Date();

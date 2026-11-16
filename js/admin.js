@@ -14,6 +14,7 @@ const Admin = {
     ['mileage', '🎖 마일리지'],
     ['import', '📥 엑셀 등록'],
     ['export', '📤 전체 엑셀 전송'],
+    ['long_absent', '⏳ 장기결석자'],
     ['discharged', '🗂 전역자'],
     ['settings', '⚙️ 설정'],
   ],
@@ -22,6 +23,7 @@ const Admin = {
     if (typeof Backend !== 'undefined' && !tab) {
       try { await Backend.syncFromServerIfChanged(); } catch (e) { }
     }
+    try { await Store.processDischarges(); } catch (e) { }
     if (!tab) tab = (await Store.warnings()).some(w => !w.resolved) ? 'warnings' : 'report';
     this.tab = tab; this.render();
   },
@@ -549,59 +551,116 @@ const Admin = {
         return true;
       });
 
-      // 부대별 요약 배지
+      // 부대별 요약 배지 (클릭 시 해당 부대만 보기 / 전체 보기에서 부대 위치로 바로 점프 가능)
       const unitCounts = allUnitLabels()
-        .map(u => ({ label: u.label, count: dayAll.filter(a => a.label === u.label).length }))
+        .map(u => ({
+          label: u.label,
+          val: `${u.unit}|${u.company || ''}`,
+          count: dayAll.filter(a => a.label === u.label).length,
+        }))
         .filter(u => u.count > 0);
 
       $('#td-summary').innerHTML = `
         <div class="card" style="margin-bottom:.8rem">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
-            <h3 style="margin:0">📸 ${selDate} (${weekdayOf(selDate)}) 예배 출석자 — 총 <span style="color:var(--navy)">${dayAll.length}명</span> ${filtered.length !== dayAll.length ? `(검색 ${filtered.length}명)` : ''}</h3>
+            <h3 style="margin:0">📸 ${selDate} (${weekdayOf(selDate)}) 예배 출석자 — 총 <span style="color:var(--navy)">${dayAll.length}명</span> ${filtered.length !== dayAll.length ? `(선택 ${filtered.length}명)` : ''}</h3>
             ${dayAll.length ? `<button class="btn ghost small" id="td-dl-photos">💾 이 날 출석 사진 전체 저장 (${dayAll.filter(a => a.hasPhoto).length}장)</button>` : ''}
           </div>
           ${unitCounts.length ? `
-            <div class="chips" style="margin-top:.6rem">
-              ${unitCounts.map(u => `<span style="font-weight:700;background:#e2e8f0;color:#1e293b">${esc(u.label)}: <b>${u.count}명</b></span>`).join('')}
-            </div>` : ''}
+            <div style="margin-top:.6rem">
+              <div class="muted" style="font-size:.78rem;margin-bottom:.35rem;font-weight:700">
+                🔍 부대명을 누르면 해당 부대 인원만 모아볼 수 있습니다. (다시 누르거나 ‘전체 보기’를 누르면 전체 표시)
+              </div>
+              <div class="chips" style="margin:0">
+                <button type="button" class="td-unit-chip ${!this.tdUnit ? 'on' : ''}" data-td-chip="">📋 전체 보기 (${dayAll.length}명)</button>
+                ${unitCounts.map(u => `
+                  <button type="button" class="td-unit-chip ${this.tdUnit === u.val ? 'on' : ''}" data-td-chip="${esc(u.val)}">${esc(u.label)}: <b>${u.count}명</b></button>
+                `).join('')}
+              </div>
+            </div>
+            ${(!this.tdUnit && unitCounts.length > 1) ? `
+              <div class="td-jump-bar">
+                <span class="muted" style="font-size:.78rem;font-weight:700">📍 목록에서 부대 위치로 점프:</span>
+                ${unitCounts.map(u => `<button type="button" class="td-jump-btn" data-td-jump="${esc(u.label)}">${esc(u.label)} (${u.count}) ⤵</button>`).join('')}
+              </div>` : ''}` : ''}
         </div>`;
+
+      $$('[data-td-chip]', $('#td-summary')).forEach(b => b.onclick = () => {
+        const next = b.dataset.tdChip;
+        $('#td-unit').value = (next && this.tdUnit === next) ? '' : next;
+        drawToday();
+      });
+
+      $$('[data-td-jump]', $('#td-summary')).forEach(b => b.onclick = () => {
+        const sec = document.querySelector(`[data-unit-sec="${CSS.escape(b.dataset.tdJump)}"]`);
+        if (sec) {
+          sec.scrollIntoView({ behavior: 'smooth', block: 'start' });
+          const head = $('.td-unit-sec-head', sec);
+          if (head) {
+            head.classList.add('flash');
+            setTimeout(() => head.classList.remove('flash'), 900);
+          }
+        }
+      });
 
       const dlBtn = $('#td-dl-photos');
       if (dlBtn) {
         dlBtn.onclick = async () => {
-          const files = await photoFiles(dayAll);
-          if (!files.length) return Modal.alert('이 날짜에 저장된 사진이 없습니다.');
+          const files = await photoFiles(filtered.length ? filtered : dayAll);
+          if (!files.length) return Modal.alert('저장된 사진이 없습니다.');
           await downloadFiles(files);
         };
       }
 
       if (!filtered.length) {
-        $('#td-gallery').innerHTML = `<div class="card"><p class="muted" style="text-align:center;padding:2rem 0">${selDate} (${weekdayOf(selDate)})에는 출석 기록이 없습니다.</p></div>`;
+        $('#td-gallery').innerHTML = `<div class="card"><p class="muted" style="text-align:center;padding:2rem 0">${selDate} (${weekdayOf(selDate)})에는 조건에 해당하는 출석 기록이 없습니다.</p></div>`;
         return;
       }
 
-      $('#td-gallery').innerHTML = `
-        <div class="hist-grid">
-          ${filtered.map((a, idx) => `
-            <div class="hist-card td-att-card" data-id="${a.id}">
-              <div class="hist-card-head">
-                <div>
-                  <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
-                  <b style="font-size:1.05rem">${esc(a.label)} ${this.memberLink(a.person?.id, a.memberName)}</b>
-                  <div class="muted" style="font-size:.82rem;margin-top:.2rem">
-                    ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
-                    ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
+      // 부대별로 섹션을 나누어 전체 보기·부대별 점프·단독 보기 모두 지원
+      const sections = [];
+      allUnitLabels().forEach(u => {
+        const uList = filtered.filter(a => a.label === u.label);
+        if (uList.length) sections.push({ label: u.label, val: `${u.unit}|${u.company || ''}`, items: uList });
+      });
+
+      $('#td-gallery').innerHTML = sections.map(sec => `
+        <div class="td-unit-section" data-unit-sec="${esc(sec.label)}">
+          <div class="td-unit-sec-head">
+            <span>🚩 ${esc(sec.label)} (${sec.items.length}명)</span>
+            <button type="button" class="btn ghost small" data-td-sec-filter="${this.tdUnit === sec.val ? '' : esc(sec.val)}" style="background:#fff;padding:.25em .65em;font-size:.78rem">
+              ${this.tdUnit === sec.val ? '📋 전체 부대 보기' : '🔍 이 부대만 보기'}
+            </button>
+          </div>
+          <div class="hist-grid">
+            ${sec.items.map((a, idx) => `
+              <div class="hist-card td-att-card" data-id="${a.id}">
+                <div class="hist-card-head">
+                  <div>
+                    <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
+                    <b style="font-size:1.05rem">${esc(a.label)} ${this.memberLink(a.person?.id, a.memberName)}</b>
+                    <div class="muted" style="font-size:.82rem;margin-top:.2rem">
+                      ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
+                      ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
+                    </div>
                   </div>
+                  <button class="btn small danger" data-td-del="${a.id}">삭제</button>
                 </div>
-                <button class="btn small danger" data-td-del="${a.id}">삭제</button>
+                <div class="hist-th"><p class="muted">사진 불러오는 중…</p></div>
               </div>
-              <div class="hist-th"><p class="muted">사진 불러오는 중…</p></div>
-            </div>
-          `).join('')}
-        </div>`;
+            `).join('')}
+          </div>
+        </div>
+      `).join('');
+
+      $$('[data-td-sec-filter]', $('#td-gallery')).forEach(b => b.onclick = () => {
+        $('#td-unit').value = b.dataset.tdSecFilter;
+        drawToday();
+      });
 
       this.bindMemberHistoryLinks($('#td-gallery'));
       for (const card of $$('.td-att-card', $('#td-gallery'))) {
+        if (!card.isConnected) break;
         const a = filtered.find(x => x.id === card.dataset.id);
         if (a) await this.fillThumbs($('.hist-th', card), [a]);
       }
@@ -2280,6 +2339,194 @@ const Admin = {
     return new File([wbout], fileName, {
       type: 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet',
     });
+  },
+
+  /* ===================== ⏳ 장기결석자 (3개월 이상 미출석 현역 형제만 표시 · 전역자 제외) ===================== */
+  async tab_long_absent(body) {
+    // 먼저 전역일이 지난 인원은 전역자 보관함으로 이동시켜 장기결석자에 섞이지 않게 함
+    await Store.processDischarges();
+    const today = todayStr();
+    const cut = new Date();
+    cut.setMonth(cut.getMonth() - CONFIG.longAbsentMonths);
+    const cutStr = fmtDate(cut);
+
+    const ms = await Store.membersWithStats();
+    const longList = ms
+      .filter(m => !m.discharged && (!m.dischargeDate || m.dischargeDate >= today) && Store.isLongAbsent(m))
+      .sort((a, b) =>
+        unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) ||
+        String(a.last || a.createdAt || '').localeCompare(String(b.last || b.createdAt || '')) ||
+        koSort(a, b)
+      );
+
+    if (!this.selectedLongAbsentIds) this.selectedLongAbsentIds = new Set();
+    const validIds = new Set(longList.map(m => String(m.id)));
+    for (const id of [...this.selectedLongAbsentIds]) {
+      if (!validIds.has(id)) this.selectedLongAbsentIds.delete(id);
+    }
+
+    const unitCounts = allUnitLabels()
+      .map(u => ({
+        label: u.label,
+        val: `${u.unit}|${u.company || ''}`,
+        count: longList.filter(m => unitLabel(m) === u.label).length,
+      }))
+      .filter(u => u.count > 0);
+
+    const daysSince = ref => {
+      if (!ref || isUnknownDate(ref)) return null;
+      return Math.max(0, Math.floor((new Date(today + 'T00:00:00') - new Date(ref + 'T00:00:00')) / 864e5));
+    };
+
+    body.innerHTML = `
+      <div class="note">
+        최근 <b>${CONFIG.longAbsentMonths}개월(${fmtYYMMDD(cutStr)} 이전)</b> 이상 예배 출석 기록이 없는 <b>현역 형제</b> 명단입니다.<br>
+        ※ 전역일이 지난 인원은 자동으로 ‘전역자’ 탭으로 분류되어 이 목록에는 포함되지 않습니다. (예배당 키오스크에서는 <b>[오랜만에 왔어요]</b> 버튼에 표시됩니다.)
+      </div>
+      <div class="card" style="margin-bottom:.8rem;padding:.85rem 1rem;background:#fff8f0;border:1.5px solid #fed7aa">
+        <div style="font-weight:800;color:#9a3412;margin-bottom:.45rem">
+          ⏳ 현재 장기결석자 총 <b>${longList.length}명</b> (기준일: ${cutStr} 이전 마지막 출석)
+        </div>
+        ${unitCounts.length ? `
+          <div class="chips" style="margin:0">
+            <button type="button" class="td-unit-chip ${!this.laUnit ? 'on' : ''}" data-la-chip="">전체 보기 (${longList.length}명)</button>
+            ${unitCounts.map(u => `
+              <button type="button" class="td-unit-chip ${this.laUnit === u.val ? 'on' : ''}" data-la-chip="${esc(u.val)}">${esc(u.label)}: <b>${u.count}명</b></button>
+            `).join('')}
+          </div>` : ''}
+      </div>
+      <div class="toolbar">
+        ${this.unitSelect('la-unit', true, this.laUnit || '')}
+        <input id="la-q" placeholder="이름 검색" value="${esc(this.laQ || '')}" style="max-width:160px">
+        <button type="button" class="btn ghost small" id="la-xl">📊 장기결석자 명단 엑셀 다운로드</button>
+        <button type="button" class="btn danger small" id="la-del-sel" ${this.selectedLongAbsentIds.size ? '' : 'disabled'}>🗑️ 선택 삭제 (<span id="la-sel-cnt">${this.selectedLongAbsentIds.size}</span>명)</button>
+      </div>
+      <div id="la-list"></div>`;
+
+    let curFiltered = [];
+    const updateDelBtn = () => {
+      const btn = $('#la-del-sel');
+      const cnt = $('#la-sel-cnt');
+      if (btn) btn.disabled = this.selectedLongAbsentIds.size === 0;
+      if (cnt) cnt.textContent = this.selectedLongAbsentIds.size;
+    };
+
+    const draw = () => {
+      this.laUnit = $('#la-unit').value;
+      this.laQ = $('#la-q').value.trim();
+
+      $$('[data-la-chip]', body).forEach(b => b.classList.toggle('on', b.dataset.laChip === (this.laUnit || '')));
+
+      curFiltered = longList.filter(m => {
+        if (this.laUnit && `${m.unit}|${m.company || ''}` !== this.laUnit) return false;
+        if (this.laQ && !m.name.includes(this.laQ)) return false;
+        return true;
+      });
+
+      const allChecked = curFiltered.length > 0 && curFiltered.every(m => this.selectedLongAbsentIds.has(String(m.id)));
+      $('#la-list').innerHTML = curFiltered.length ? `
+        <p class="muted" style="margin:.2rem 0 .5rem">표시 중: <b>${curFiltered.length}명</b> (이름을 클릭하면 출석 이력을 바로 볼 수 있습니다)</p>
+        <div class="tbl-wrap">
+          <table class="tbl">
+            <thead>
+              <tr>
+                <th style="width:38px;text-align:center"><input type="checkbox" id="la-chk-all" ${allChecked ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></th>
+                <th>연번</th><th>소속</th><th>이름</th><th>전역일</th><th>누적출석</th><th>마지막 출석 (경과)</th><th></th>
+              </tr>
+            </thead>
+            <tbody>
+              ${curFiltered.map((m, idx) => {
+                const refDate = m.last || m.createdAt || '';
+                const dAgo = daysSince(refDate);
+                const lastTxt = m.last ? fmtYYMMDD(m.last) : `미출석(등록 ${fmtYYMMDD(m.createdAt)})`;
+                return `
+                  <tr>
+                    <td style="text-align:center"><input type="checkbox" class="la-chk" data-id="${m.id}" ${this.selectedLongAbsentIds.has(String(m.id)) ? 'checked' : ''} style="width:18px;height:18px;cursor:pointer"></td>
+                    <td>${idx + 1}</td>
+                    <td>${esc(unitLabel(m))}</td>
+                    <td>${this.memberLink(m.id, m.name)}</td>
+                    <td>${fmtYYMMDD(m.dischargeDate) || '-'}</td>
+                    <td><b>${m.total}회</b></td>
+                    <td><span style="color:#b45309;font-weight:700">${lastTxt}</span>${dAgo !== null ? ` <span class="badge" style="background:#ea580c">${dAgo}일째</span>` : ''}</td>
+                    <td class="nowrap">
+                      <button type="button" class="btn small ghost" data-la-hist="${m.id}">기록</button>
+                      <button type="button" class="btn small ghost" data-la-edit="${m.id}">수정</button>
+                      <button type="button" class="btn small danger" data-la-del="${m.id}">삭제</button>
+                    </td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>` : `<div class="card"><p class="muted" style="text-align:center;padding:1.5rem 0">해당 조건의 장기결석자가 없습니다. 👍</p></div>`;
+
+      this.bindMemberHistoryLinks($('#la-list'));
+      const chkAll = $('#la-chk-all');
+      if (chkAll) {
+        chkAll.onchange = e => {
+          curFiltered.forEach(m => {
+            if (e.target.checked) this.selectedLongAbsentIds.add(String(m.id));
+            else this.selectedLongAbsentIds.delete(String(m.id));
+          });
+          draw();
+        };
+      }
+      $$('.la-chk', $('#la-list')).forEach(cb => {
+        cb.onchange = e => {
+          if (e.target.checked) this.selectedLongAbsentIds.add(String(cb.dataset.id));
+          else this.selectedLongAbsentIds.delete(String(cb.dataset.id));
+          if (chkAll) chkAll.checked = curFiltered.length > 0 && curFiltered.every(m => this.selectedLongAbsentIds.has(String(m.id)));
+          updateDelBtn();
+        };
+      });
+      $$('[data-la-hist]', $('#la-list')).forEach(b => b.onclick = () => this.openPersonHistoryById(b.dataset.laHist));
+      $$('[data-la-edit]', $('#la-list')).forEach(b => b.onclick = () => {
+        const target = longList.find(m => String(m.id) === String(b.dataset.laEdit));
+        if (target) this.memberForm(target);
+      });
+      $$('[data-la-del]', $('#la-list')).forEach(b => b.onclick = async () => {
+        const target = longList.find(m => String(m.id) === String(b.dataset.laDel));
+        if (!target) return;
+        if (!await Modal.confirm(`<b>${esc(unitLabel(target))} ${esc(target.name)}</b> 형제의 모든 정보와 출석 기록·사진을 삭제할까요?`, '삭제')) return;
+        await Store.deleteMember(target.id);
+        this.selectedLongAbsentIds.delete(String(target.id));
+        this.render();
+      });
+      updateDelBtn();
+    };
+
+    $$('[data-la-chip]', body).forEach(b => b.onclick = () => {
+      $('#la-unit').value = (b.dataset.laChip && this.laUnit === b.dataset.laChip) ? '' : b.dataset.laChip;
+      draw();
+    });
+    $('#la-unit').onchange = draw;
+    $('#la-q').oninput = draw;
+    $('#la-xl').onclick = () => {
+      if (typeof XLSX === 'undefined') return Modal.alert('엑셀 도구를 불러오지 못했습니다.');
+      const rows = (curFiltered.length ? curFiltered : longList).map((m, i) => ({
+        연번: i + 1,
+        소속부대: unitLabel(m),
+        이름: m.name,
+        전역일: fmtYYMMDD(m.dischargeDate),
+        누적출석: m.total,
+        마지막출석일: m.last ? fmtYYMMDD(m.last) : `미출석(등록 ${fmtYYMMDD(m.createdAt)})`,
+        미출석경과일: daysSince(m.last || m.createdAt) ?? '',
+      }));
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.json_to_sheet(rows.length ? rows : [{ 안내: '장기결석자가 없습니다.' }]), '장기결석자명단');
+      XLSX.writeFile(wb, `천군교회_장기결석자명단_${today}.xlsx`);
+    };
+    $('#la-del-sel').onclick = async () => {
+      const ids = [...this.selectedLongAbsentIds];
+      if (!ids.length) return;
+      const names = ids.map(id => longList.find(x => String(x.id) === String(id))?.name).filter(Boolean);
+      const previewNames = names.slice(0, 5).join(', ') + (names.length > 5 ? ` 외 ${names.length - 5}명` : '');
+      if (!await Modal.confirm(`선택한 장기결석자 <b>${ids.length}명</b>(${esc(previewNames)})을 일괄 삭제할까요?`, '일괄 삭제')) return;
+      await Store.deleteMembersBatch(ids);
+      this.selectedLongAbsentIds.clear();
+      this.render();
+    };
+
+    draw();
   },
 
   /* ===================== 전역자 보관함 ===================== */

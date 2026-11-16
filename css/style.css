@@ -266,3 +266,14 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
 .excel-viewer-tbl th, .excel-viewer-tbl td { border: 1px solid #e2e8f0; padding: .42rem .55rem; text-align: center; white-space: nowrap; }
 .excel-viewer-tbl thead th { background: #eef2f7; color: #1e293b; font-weight: 700; position: sticky; top: 0; z-index: 1; }
 .excel-viewer-tbl tr.total td { font-weight: 800; background: #f8fafc; }
+
+/* 오늘의 출석자: 부대별 필터 칩 & 부대 위치 점프 바 */
+.td-unit-chip { border: 1.5px solid #cbd5e1; background: #f1f5f9; color: #1e293b; border-radius: 999px; padding: .35em .8em; font-size: .82rem; font-weight: 700; cursor: pointer; transition: all .15s; }
+.td-unit-chip:hover { border-color: #3b82f6; background: #eff6ff; color: #1e3a8a; }
+.td-unit-chip.on { background: var(--navy); border-color: var(--navy); color: #fff; }
+.td-jump-bar { display: flex; flex-wrap: wrap; align-items: center; gap: .35rem; margin-top: .55rem; padding-top: .55rem; border-top: 1px dashed #cbd5e1; }
+.td-jump-btn { border: 1px solid #bfdbfe; background: #eff6ff; color: #1e40af; border-radius: 6px; padding: .24em .58em; font-size: .78rem; font-weight: 700; cursor: pointer; }
+.td-jump-btn:hover { background: #dbeafe; }
+.td-unit-section { margin-bottom: 1.15rem; }
+.td-unit-sec-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .85rem; margin-bottom: .55rem; background: #e2e8f0; border-left: 5px solid var(--navy); border-radius: 8px; color: #0f172a; font-weight: 800; transition: background .3s; }
+.td-unit-sec-head.flash { background: #fef08a; }

@@ -51,29 +51,33 @@ const Camera = {
   },
 
   /**
-   * 이름표를 가리지 않도록 사진 하단 우측 끝에 작고 깔끔하게 워터마크 배치
+   * 얼굴·이름표가 가려지지 않도록 사진 우측 맨위 상단에 한 줄 워터마크 배치
    */
   watermark(ctx, w, h, lines) {
-    const fs = Math.max(13, Math.round(Math.min(w, h) * 0.034));
-    const lh = fs * 1.32;
-    const padX = fs * 0.75, padY = fs * 0.55;
-    ctx.font = `bold ${fs}px sans-serif`;
+    const text = (Array.isArray(lines) ? lines.filter(Boolean).join(' ') : String(lines || '')).trim();
+    if (!text) return;
 
-    let maxTextW = 0;
-    lines.forEach((l, i) => {
-      ctx.font = `${i === 0 ? '' : 'bold '}${i === 0 ? Math.round(fs * 0.85) : fs}px sans-serif`;
-      const tw = ctx.measureText(l).width;
-      if (tw > maxTextW) maxTextW = tw;
-    });
-
-    const boxW = Math.min(w * 0.65, maxTextW + padX * 2);
-    const boxH = lines.length * lh + padY * 2;
-    const boxX = w - boxW - padX * 0.8;
-    const boxY = h - boxH - padY * 0.8;
-
+    let fs = Math.max(12, Math.round(Math.min(w, h) * 0.028));
     ctx.save();
-    ctx.fillStyle = 'rgba(15, 23, 42, 0.72)';
-    const rad = 10;
+    ctx.font = `bold ${fs}px sans-serif`;
+    const maxW = w * 0.92;
+    let tw = ctx.measureText(text).width;
+    if (tw > maxW && tw > 0) {
+      fs = Math.max(10, Math.floor(fs * (maxW / tw)));
+      ctx.font = `bold ${fs}px sans-serif`;
+      tw = ctx.measureText(text).width;
+    }
+
+    const padX = Math.round(fs * 0.65);
+    const padY = Math.round(fs * 0.38);
+    const boxW = Math.min(w - 12, tw + padX * 2);
+    const boxH = fs + padY * 2;
+    const margin = Math.max(6, Math.round(fs * 0.45));
+    const boxX = Math.max(6, w - boxW - margin);
+    const boxY = margin;
+
+    ctx.fillStyle = 'rgba(15, 23, 42, 0.65)';
+    const rad = 7;
     ctx.beginPath();
     ctx.moveTo(boxX + rad, boxY);
     ctx.lineTo(boxX + boxW - rad, boxY);
@@ -89,12 +93,8 @@ const Camera = {
 
     ctx.textAlign = 'right';
     ctx.textBaseline = 'top';
-    const textRightX = boxX + boxW - padX;
-    lines.forEach((l, i) => {
-      ctx.font = `${i === 0 ? '' : 'bold '}${i === 0 ? Math.round(fs * 0.85) : fs}px sans-serif`;
-      ctx.fillStyle = i === 0 ? '#ffd76a' : '#ffffff';
-      ctx.fillText(l, textRightX, boxY + padY + i * lh);
-    });
+    ctx.fillStyle = '#ffffff';
+    ctx.fillText(text, boxX + boxW - padX, boxY + padY);
     ctx.restore();
   },
 

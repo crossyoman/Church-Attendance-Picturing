@@ -319,13 +319,9 @@ const App = {
       if (fl) { fl.classList.remove('go'); void fl.offsetWidth; fl.classList.add('go'); }
 
       const shotAt = new Date();
-      // 워터마크: 이름표를 가리지 않도록 전역일은 빼고 우측에 배치
-      const lines = [
-        `${CONFIG.churchName} 예배 출석`,
-        `${fmtDate(shotAt)} ${fmtTime(shotAt)} ${who.name}`,
-        unitLabel(who),
-      ];
-      const blob = await Camera.toBlob(Camera.capture(video, lines));
+      // 워터마크: 사진이 최대한 가려지지 않도록 우측 맨위 상단 한 줄 (날짜 요일 시각 부대 이름)
+      const wmLine = `${fmtDate(shotAt)} ${worshipDayOf(shotAt)} ${fmtTime(shotAt)} ${unitLabel(who)} ${who.name}`;
+      const blob = await Camera.toBlob(Camera.capture(video, [wmLine]));
       Camera.stop();
       actions.innerHTML = '<p class="hint">저장 중…</p>';
 
