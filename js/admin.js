@@ -511,8 +511,23 @@ const Admin = {
     if (!this.todayViewDate) {
       this.todayViewDate = worshipDates.includes(today) ? today : (worshipDates[0] || today);
     }
+    if (!this.tdSortMode) {
+      this.tdSortMode = 'unit_name'; // 기본값: 부대별 가나다순 정렬
+    }
+
+    const sortButtons = [
+      ['all_time', '⏰ 전체 시간순 정렬'],
+      ['unit_time', '🏢⏰ 부대별 시간순 정렬'],
+      ['all_name', '🔤 전체 가나다순 정렬'],
+      ['unit_name', '🏢 부대별 가나다순 정렬'],
+    ];
 
     body.innerHTML = `
+      <div class="td-sort-bar" id="td-sort-bar">
+        ${sortButtons.map(([mode, label]) => `
+          <button type="button" class="td-sort-btn ${this.tdSortMode === mode ? 'on' : ''}" data-td-sort="${mode}">${label}</button>
+        `).join('')}
+      </div>
       <div class="card" style="margin-bottom:.8rem;padding:.9rem 1.1rem;background:#f8fafc;border:1.5px solid #cbd5e1">
         <div class="toolbar" style="margin-bottom:0;gap:.6rem;align-items:center">
           <b style="color:var(--navy)">📅 예배 날짜 선택:</b>
@@ -538,18 +553,40 @@ const Admin = {
       this.tdUnit = $('#td-unit').value;
       this.tdQ = $('#td-q').value.trim();
 
-      const dayAll = allAtts
-        .filter(a => a.date === selDate)
-        .sort((a, b) => unitOrder(a.label) - unitOrder(b.label) || a.time.localeCompare(b.time) || a.memberName.localeCompare(b.memberName, 'ko'));
-
-      const filtered = dayAll.filter(a => {
-        if (this.tdUnit) {
-          const uStr = `${a.person.unit}|${a.person.company || ''}`;
-          if (uStr !== this.tdUnit) return false;
-        }
-        if (this.tdQ && !a.memberName.includes(this.tdQ)) return false;
-        return true;
+      $$('[data-td-sort]', $('#td-sort-bar')).forEach(b => {
+        b.classList.toggle('on', b.dataset.tdSort === this.tdSortMode);
       });
+
+      const cmpName = (a, b) => a.memberName.localeCompare(b.memberName, 'ko') || a.time.localeCompare(b.time) || (a.ts || 0) - (b.ts || 0);
+      const cmpTime = (a, b) => a.time.localeCompare(b.time) || (a.ts || 0) - (b.ts || 0) || a.memberName.localeCompare(b.memberName, 'ko');
+      const cmpUnitName = (a, b) => unitOrder(a.label) - unitOrder(b.label) || cmpName(a, b);
+      const cmpUnitTime = (a, b) => unitOrder(a.label) - unitOrder(b.label) || cmpTime(a, b);
+      const cmpFn = {
+        all_time: cmpTime,
+        unit_time: cmpUnitTime,
+        all_name: cmpName,
+        unit_name: cmpUnitName,
+      }[this.tdSortMode] || cmpUnitName;
+
+      const dayAll = allAtts.filter(a => a.date === selDate).sort(cmpUnitName);
+      const filtered = dayAll
+        .filter(a => {
+          if (this.tdUnit) {
+            const uStr = `${a.person.unit}|${a.person.company || ''}`;
+            if (uStr !== this.tdUnit) return false;
+          }
+          if (this.tdQ && !a.memberName.includes(this.tdQ)) return false;
+          return true;
+        })
+        .sort(cmpFn);
+
+      const isUnitGrouped = (this.tdSortMode === 'unit_name' || this.tdSortMode === 'unit_time');
+      const sortDesc = {
+        all_time: '전체 시간순',
+        unit_time: '부대별 시간순',
+        all_name: '전체 가나다순',
+        unit_name: '부대별 가나다순',
+      }[this.tdSortMode] || '부대별 가나다순';
 
       // 부대별 요약 배지 (클릭 시 해당 부대만 보기 / 전체 보기에서 부대 위치로 바로 점프 가능)
       const unitCounts = allUnitLabels()
@@ -563,7 +600,7 @@ const Admin = {
       $('#td-summary').innerHTML = `
         <div class="card" style="margin-bottom:.8rem">
           <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem">
-            <h3 style="margin:0">📸 ${selDate} (${weekdayOf(selDate)}) 예배 출석자 — 총 <span style="color:var(--navy)">${dayAll.length}명</span> ${filtered.length !== dayAll.length ? `(선택 ${filtered.length}명)` : ''}</h3>
+            <h3 style="margin:0">📸 ${selDate} (${weekdayOf(selDate)}) 예배 출석자 — 총 <span style="color:var(--navy)">${dayAll.length}명</span> <span class="badge" style="background:var(--navy)">${sortDesc}</span> ${filtered.length !== dayAll.length ? `(선택 ${filtered.length}명)` : ''}</h3>
             ${dayAll.length ? `<button class="btn ghost small" id="td-dl-photos">💾 이 날 출석 사진 전체 저장 (${dayAll.filter(a => a.hasPhoto).length}장)</button>` : ''}
           </div>
           ${unitCounts.length ? `
@@ -578,7 +615,7 @@ const Admin = {
                 `).join('')}
               </div>
             </div>
-            ${(!this.tdUnit && unitCounts.length > 1) ? `
+            ${(isUnitGrouped && !this.tdUnit && unitCounts.length > 1) ? `
               <div class="td-jump-bar">
                 <span class="muted" style="font-size:.78rem;font-weight:700">📍 목록에서 부대 위치로 점프:</span>
                 ${unitCounts.map(u => `<button type="button" class="td-jump-btn" data-td-jump="${esc(u.label)}">${esc(u.label)} (${u.count}) ⤵</button>`).join('')}
@@ -617,46 +654,64 @@ const Admin = {
         return;
       }
 
-      // 부대별로 섹션을 나누어 전체 보기·부대별 점프·단독 보기 모두 지원
-      const sections = [];
-      allUnitLabels().forEach(u => {
-        const uList = filtered.filter(a => a.label === u.label);
-        if (uList.length) sections.push({ label: u.label, val: `${u.unit}|${u.company || ''}`, items: uList });
-      });
-
-      $('#td-gallery').innerHTML = sections.map(sec => `
-        <div class="td-unit-section" data-unit-sec="${esc(sec.label)}">
-          <div class="td-unit-sec-head">
-            <span>🚩 ${esc(sec.label)} (${sec.items.length}명)</span>
-            <button type="button" class="btn ghost small" data-td-sec-filter="${this.tdUnit === sec.val ? '' : esc(sec.val)}" style="background:#fff;padding:.25em .65em;font-size:.78rem">
-              ${this.tdUnit === sec.val ? '📋 전체 부대 보기' : '🔍 이 부대만 보기'}
-            </button>
-          </div>
-          <div class="hist-grid">
-            ${sec.items.map((a, idx) => `
-              <div class="hist-card td-att-card" data-id="${a.id}">
-                <div class="hist-card-head">
-                  <div>
-                    <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
-                    <b style="font-size:1.05rem">${esc(a.label)} ${this.memberLink(a.person?.id, a.memberName)}</b>
-                    <div class="muted" style="font-size:.82rem;margin-top:.2rem">
-                      ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
-                      ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
-                    </div>
-                  </div>
-                  <button class="btn small danger" data-td-del="${a.id}">삭제</button>
-                </div>
-                <div class="hist-th"><p class="muted">사진 불러오는 중…</p></div>
+      const renderCard = (a, idx) => `
+        <div class="hist-card td-att-card" data-id="${a.id}">
+          <div class="hist-card-head">
+            <div>
+              <span class="badge" style="background:var(--navy);color:#fff;margin-right:.3rem">${idx + 1}</span>
+              <b style="font-size:1.05rem">${esc(a.label)} ${this.memberLink(a.person?.id, a.memberName)}</b>
+              <div class="muted" style="font-size:.82rem;margin-top:.2rem">
+                ⏰ ${a.time} 출석 · 누적 <b>${a.cumCount}회</b> · 전역 ${fmtYYMMDD(a.dischargeDate)}
+                ${a.retakes ? ` · <span style="color:#b45309;font-weight:700">재촬영 ${a.retakes}회</span>` : ''}
               </div>
-            `).join('')}
+            </div>
+            <button class="btn small danger" data-td-del="${a.id}">삭제</button>
           </div>
-        </div>
-      `).join('');
+          <div class="hist-th"><p class="muted">사진 불러오는 중…</p></div>
+        </div>`;
 
-      $$('[data-td-sec-filter]', $('#td-gallery')).forEach(b => b.onclick = () => {
-        $('#td-unit').value = b.dataset.tdSecFilter;
-        drawToday();
-      });
+      if (isUnitGrouped) {
+        // 부대별 섹션(가나다순 또는 시간순)으로 묶어서 표시
+        const sections = [];
+        allUnitLabels().forEach(u => {
+          const uList = filtered.filter(a => a.label === u.label);
+          if (uList.length) sections.push({ label: u.label, val: `${u.unit}|${u.company || ''}`, items: uList });
+        });
+
+        $('#td-gallery').innerHTML = sections.map(sec => `
+          <div class="td-unit-section" data-unit-sec="${esc(sec.label)}">
+            <div class="td-unit-sec-head">
+              <span>🚩 ${esc(sec.label)} (${sec.items.length}명 · ${this.tdSortMode === 'unit_name' ? '가나다순' : '시간순'})</span>
+              <button type="button" class="btn ghost small" data-td-sec-filter="${this.tdUnit === sec.val ? '' : esc(sec.val)}" style="background:#fff;padding:.25em .65em;font-size:.78rem">
+                ${this.tdUnit === sec.val ? '📋 전체 부대 보기' : '🔍 이 부대만 보기'}
+              </button>
+            </div>
+            <div class="hist-grid">
+              ${sec.items.map((a, idx) => renderCard(a, idx)).join('')}
+            </div>
+          </div>
+        `).join('');
+
+        $$('[data-td-sec-filter]', $('#td-gallery')).forEach(b => b.onclick = () => {
+          $('#td-unit').value = b.dataset.tdSecFilter;
+          drawToday();
+        });
+      } else {
+        // 전체 가나다순 또는 전체 시간순 단일 목록
+        $('#td-gallery').innerHTML = `
+          <div class="td-unit-section">
+            <div class="td-unit-sec-head">
+              <span>📋 ${this.tdUnit ? esc(unitCounts.find(u => u.val === this.tdUnit)?.label || '선택 부대') : '전체 출석자'} (${filtered.length}명 · ${this.tdSortMode === 'all_name' ? '전체 가나다순' : '전체 시간순'})</span>
+              ${this.tdUnit ? `<button type="button" class="btn ghost small" id="td-flat-all" style="background:#fff;padding:.25em .65em;font-size:.78rem">📋 전체 부대 보기</button>` : ''}
+            </div>
+            <div class="hist-grid">
+              ${filtered.map((a, idx) => renderCard(a, idx)).join('')}
+            </div>
+          </div>`;
+        if ($('#td-flat-all')) {
+          $('#td-flat-all').onclick = () => { $('#td-unit').value = ''; drawToday(); };
+        }
+      }
 
       this.bindMemberHistoryLinks($('#td-gallery'));
       for (const card of $$('.td-att-card', $('#td-gallery'))) {
@@ -673,6 +728,13 @@ const Admin = {
       });
     };
 
+    $$('[data-td-sort]', $('#td-sort-bar')).forEach(b => b.onclick = () => {
+      this.tdSortMode = b.dataset.tdSort;
+      if (this.tdSortMode === 'all_time' || this.tdSortMode === 'all_name') {
+        $('#td-unit').value = '';
+      }
+      drawToday();
+    });
     $('#td-date').onchange = () => {
       $('#td-recent').value = $('#td-date').value;
       drawToday();

@@ -277,3 +277,13 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
 .td-unit-section { margin-bottom: 1.15rem; }
 .td-unit-sec-head { display: flex; align-items: center; justify-content: space-between; gap: .5rem; padding: .5rem .85rem; margin-bottom: .55rem; background: #e2e8f0; border-left: 5px solid var(--navy); border-radius: 8px; color: #0f172a; font-weight: 800; transition: background .3s; }
 .td-unit-sec-head.flash { background: #fef08a; }
+
+/* 오늘의 출석자: 상단 4개 정렬 모드 버튼 */
+.td-sort-bar { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: .5rem; margin-bottom: .75rem; }
+.td-sort-btn { border: 1.5px solid #cbd5e1; background: #fff; color: #334155; border-radius: 10px; padding: .6em .5em; font-size: .85rem; font-weight: 700; cursor: pointer; text-align: center; transition: all .15s; box-shadow: 0 1px 3px rgba(0,0,0,.04); }
+.td-sort-btn:hover { border-color: #3b82f6; background: #eff6ff; color: #1e3a8a; }
+.td-sort-btn.on { background: var(--navy); border-color: var(--navy); color: #fff; box-shadow: 0 2px 8px rgba(31,58,95,.25); }
+@media (max-width: 640px) {
+  .td-sort-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; }
+  .td-sort-btn { font-size: .8rem; padding: .55em .4em; }
+}
