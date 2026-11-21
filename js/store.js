@@ -78,6 +78,15 @@ function fmtYYMMDD(v) {
   return `${y.slice(-2)}.${m}.${d}`;
 }
 
+/** 날짜를 09월06일 (MM월DD일) 형식으로 표기 */
+function fmtKorMD(v) {
+  if (!v || String(v).startsWith('0000')) return '';
+  const s = normalizeDate(v);
+  if (!s) return '';
+  const [, m, d] = s.split('-');
+  return `${m}월${d}일`;
+}
+
 const HISTORY_SEED_REV = 2026111502;
 
 /** 앱 출석 기록(m.atts)과 겹치는 날짜를 과거 출석일자 목록에서 1회씩 제외해 중복 합산을 방지 */
@@ -819,6 +828,28 @@ const Store = {
       }
     });
     return [1, 2, 3, 4, 5].map(s => byStage[s]);
+  },
+
+  /** 가장 최근에 부대에 건의 완료된 마일리지 내역 반환 (없으면 null) */
+  latestMileageProposal(m, grants = []) {
+    if (!m) return null;
+    const slots = this.getMemberSlots(m, grants);
+    const proposed = slots.filter(sl => sl && sl.proposedDate);
+    if (!proposed.length) return null;
+    const last = proposed[proposed.length - 1];
+    const baseRaw = last.baseDate || last.achievedDate || last.proposedDate;
+    const baseMD = fmtKorMD(baseRaw);
+    const propMD = fmtKorMD(last.proposedDate);
+    if (!baseMD || !propMD) return null;
+    return {
+      stage: last.stage,
+      count: last.count,
+      baseDate: baseRaw,
+      proposedDate: last.proposedDate,
+      baseMD,
+      propMD,
+      text: `${baseMD} ${last.count}회 참석 마일리지를 ${propMD}에 부대에 건의했습니다.`,
+    };
   },
 
   grantedUpTo(m, grants) {

@@ -351,18 +351,24 @@ const App = {
     }
   },
 
-  /* ---------- 7. 저장 완료 (사진 확인 + 기록 취소) ---------- */
+  /* ---------- 7. 출석 완료 (사진 확인 + 마일리지 건의 내역 + 기록 취소) ---------- */
   done({ member, total, att, blob, isNew, back }) {
     const U = CONFIG.mileageUnit;
     const url = URL.createObjectURL(blob);
     const extra = total % U === 0 ? `<p class="done-extra">🎉 ${total}회 달성을 축하해요!</p>` : '';
+    const renderMileageHtml = g => {
+      const mil = Store.latestMileageProposal(member, g || []);
+      return mil ? `<p class="done-mileage">${esc(mil.text)}</p>` : '';
+    };
+    const initialMileageHtml = renderMileageHtml(member?.grants || []);
+
     this.set('done', `
       <div class="screen done">
         <div class="done-card">
           <img class="done-photo" src="${url}" alt="저장된 사진">
-          <p class="done-title">✅ 저장되었습니다!</p>
-          <p class="done-msg">예배 오신 것을 환영합니다!<br>오늘도 주님이 만나주실 거예요!</p>
+          <p class="done-msg">예배 오신 것을 환영합니다.</p>
           <p class="done-count"><b>${esc(member.name)}</b> 형제님, 오늘로 <b class="num">${total}</b>번째 예배에 오셨군요!</p>
+          <div id="done-mileage-wrap">${initialMileageHtml}</div>
           ${extra}
           <div class="done-actions-stack">
             <button class="btn primary done-ok-giant" id="done-ok">✔ 확인</button>
@@ -374,6 +380,12 @@ const App = {
         </div>
       </div>`);
     Sound.chime();
+    if (member && member.id) {
+      Store.grantsOf(member.id).then(grants => {
+        const wrap = $('#done-mileage-wrap');
+        if (wrap && wrap.isConnected) wrap.innerHTML = renderMileageHtml(grants);
+      }).catch(() => {});
+    }
     const cleanup = () => URL.revokeObjectURL(url);
     $('#done-ok').onclick = () => { cleanup(); this.home(); };
     $('#done-cancel').onclick = async () => {

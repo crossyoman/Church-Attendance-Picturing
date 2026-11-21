@@ -287,3 +287,6 @@ details summary { cursor: pointer; color: var(--navy-2); font-weight: 700; margi
   .td-sort-bar { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .4rem; }
   .td-sort-btn { font-size: .8rem; padding: .55em .4em; }
 }
+
+/* 완료 화면: 최근 마일리지 건의 내역 문구 */
+.done-mileage { font-size: 1.1rem; font-weight: 800; color: var(--navy); margin: .25rem 0 .85rem; line-height: 1.5; background: #eff6ff; border: 1px solid #bfdbfe; border-radius: 10px; padding: .55em .9em; }
