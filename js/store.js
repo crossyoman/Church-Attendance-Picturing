@@ -78,13 +78,13 @@ function fmtYYMMDD(v) {
   return `${y.slice(-2)}.${m}.${d}`;
 }
 
-/** 날짜를 09월06일 (MM월DD일) 형식으로 표기 */
+/** 날짜를 9월6일 (M월D일) 형식으로 표기 */
 function fmtKorMD(v) {
   if (!v || String(v).startsWith('0000')) return '';
   const s = normalizeDate(v);
   if (!s) return '';
   const [, m, d] = s.split('-');
-  return `${m}월${d}일`;
+  return `${+m}월${+d}일`;
 }
 
 const HISTORY_SEED_REV = 2026111502;
@@ -848,7 +848,7 @@ const Store = {
       proposedDate: last.proposedDate,
       baseMD,
       propMD,
-      text: `${baseMD} ${last.count}회 참석 마일리지를 ${propMD}에 부대에 건의했습니다.`,
+      text: `마일리지 : ${baseMD}부 ${last.count}회 -> ${propMD} 건의완료`,
     };
   },
 
