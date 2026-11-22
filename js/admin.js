@@ -2136,14 +2136,13 @@ const Admin = {
     drawTable();
   },
 
-  /** 소나기 등록/수정 모달 (개별 24주 / 48주 한번에 / 72주 한번에 지원) */
+  /** 소나기 등록/수정 모달 (개별 24주 / 48주 한번에 / 72주 한번에 · 대대/중대 드롭다운 + 직접입력 지원) */
   openSonagiModal(item = null, people = [], existingList = []) {
     const it = item || Store.normalizeSonagiItem({});
-    const unitOptions = [...new Set([
-      ...CONFIG.units.map(u => u.name),
-      '608수송대대',
-      ...existingList.map(x => x.unit).filter(Boolean),
-    ])];
+    const baseUnits = allUnitLabels().map(u => u.label);
+    const savedUnits = existingList.map(x => x.unit).filter(Boolean).sort((a, b) => a.localeCompare(b, 'ko'));
+    const unitOptions = [...new Set([...baseUnits, ...savedUnits])];
+
     const sortedPeople = (people || []).slice().sort((a, b) =>
       (a.discharged === b.discharged ? 0 : (a.discharged ? 1 : -1)) ||
       unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) ||
@@ -2168,13 +2167,20 @@ const Admin = {
             ${sortedPeople.map(p => `<option value="${p.id}" ${String(it.memberId) === String(p.id) ? 'selected' : ''}>[${esc(unitLabel(p))}] ${esc(p.name)} (${p.total}회 출석${p.discharged ? '·전역' : ''})</option>`).join('')}
           </select>
         </label>
-        <div class="two" style="grid-template-columns:1fr 1fr 1fr">
+        <div class="two" style="grid-template-columns:1fr 1fr 1fr;align-items:start">
           <label>이름 <input id="sn-name" value="${esc(it.name)}" placeholder="예) 홍길동" required></label>
           <label>대대
-            <input id="sn-unit-in" list="sn-unit-dl" value="${esc(it.unit)}" placeholder="예) 18보급대대" required>
-            <datalist id="sn-unit-dl">${unitOptions.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+            <select id="sn-unit-sel">
+              <option value="">대대 선택</option>
+              ${unitOptions.map(u => `<option value="${esc(u)}">${esc(u)}</option>`).join('')}
+              <option value="__custom__">➕ 직접 입력...</option>
+            </select>
+            <input id="sn-unit-custom" placeholder="대대명 직접 입력" style="display:none;margin-top:.3rem">
           </label>
-          <label>중대 (필수 확인) <input id="sn-company" value="${esc(it.company)}" placeholder="예) 2중대, 본부중대"></label>
+          <label>중대 (필수 확인)
+            <select id="sn-company-sel"></select>
+            <input id="sn-company-custom" placeholder="예) 2중대, 본부중대" style="display:none;margin-top:.3rem">
+          </label>
         </div>
         <div class="two">
           <label>교회출석여부
@@ -2314,19 +2320,101 @@ const Admin = {
       $(`#sn-wk-${st}`, w).textContent = '기간 입력';
     });
 
+    const unitSel = $('#sn-unit-sel', w);
+    const unitCustom = $('#sn-unit-custom', w);
+    const compSel = $('#sn-company-sel', w);
+    const compCustom = $('#sn-company-custom', w);
+
+    const getUnitVal = () => (unitSel.value === '__custom__' ? unitCustom.value.trim() : unitSel.value.trim());
+    const getCompanyVal = () => (compSel.value === '__custom__' ? compCustom.value.trim() : compSel.value.trim());
+
+    const rebuildCompanyOptions = (selectedComp = '') => {
+      const curUnit = getUnitVal();
+      const sameUnit = [...new Set(existingList.filter(x => (!curUnit || x.unit === curUnit) && x.company).map(x => x.company))]
+        .sort((a, b) => a.localeCompare(b, 'ko'));
+      const otherUnits = [...new Set([
+        ...existingList.filter(x => x.company && !sameUnit.includes(x.company)).map(x => x.company),
+        ...(people || []).filter(p => p.company && !sameUnit.includes(p.company)).map(p => p.company),
+      ])].sort((a, b) => a.localeCompare(b, 'ko'));
+      const allKnown = [...sameUnit, ...otherUnits];
+
+      const opts = ['<option value="">중대 선택 (없으면 직접입력)</option>'];
+      if (sameUnit.length) {
+        opts.push(`<optgroup label="${esc(curUnit || '해당 대대')} 기존 중대">${sameUnit.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</optgroup>`);
+      }
+      if (otherUnits.length) {
+        opts.push(`<optgroup label="다른 대대 기록 중대">${otherUnits.map(c => `<option value="${esc(c)}">${esc(c)}</option>`).join('')}</optgroup>`);
+      }
+      opts.push('<option value="__custom__">➕ 직접 입력 (새 중대)...</option>');
+      compSel.innerHTML = opts.join('');
+
+      if (selectedComp && allKnown.includes(selectedComp)) {
+        compSel.value = selectedComp;
+        compCustom.value = '';
+        compCustom.style.display = 'none';
+      } else if (selectedComp) {
+        compSel.value = '__custom__';
+        compCustom.value = selectedComp;
+        compCustom.style.display = 'block';
+      } else if (allKnown.length === 0) {
+        // 아직 기록된 중대가 전혀 없으면 바로 직접 입력칸 표시
+        compSel.value = '__custom__';
+        compCustom.value = '';
+        compCustom.style.display = 'block';
+      } else {
+        compSel.value = '';
+        compCustom.value = '';
+        compCustom.style.display = 'none';
+      }
+    };
+
+    const setUnitVal = (uVal, compPrefill = null) => {
+      const v = String(uVal || '').trim();
+      if (!v) {
+        unitSel.value = '';
+        unitCustom.value = '';
+        unitCustom.style.display = 'none';
+      } else if (unitOptions.includes(v)) {
+        unitSel.value = v;
+        unitCustom.value = '';
+        unitCustom.style.display = 'none';
+      } else {
+        unitSel.value = '__custom__';
+        unitCustom.value = v;
+        unitCustom.style.display = 'block';
+      }
+      rebuildCompanyOptions(compPrefill !== null ? compPrefill : getCompanyVal());
+    };
+
+    unitSel.onchange = () => {
+      if (unitSel.value === '__custom__') {
+        unitCustom.style.display = 'block';
+        unitCustom.focus();
+      } else {
+        unitCustom.style.display = 'none';
+      }
+      rebuildCompanyOptions(getCompanyVal());
+    };
+    unitCustom.oninput = () => rebuildCompanyOptions(getCompanyVal());
+
+    compSel.onchange = () => {
+      if (compSel.value === '__custom__') {
+        compCustom.style.display = 'block';
+        compCustom.focus();
+      } else {
+        compCustom.style.display = 'none';
+      }
+    };
+
+    setUnitVal(it.unit, it.company);
+
     $('#sn-pick-member', w).onchange = e => {
       const pid = e.target.value;
       if (!pid) return;
       const p = sortedPeople.find(x => String(x.id) === String(pid));
       if (!p) return;
       $('#sn-name', w).value = p.name;
-      if (String(p.unit).startsWith('608')) {
-        $('#sn-unit-in', w).value = '608수송대대';
-        $('#sn-company', w).value = p.unit.replace('608', '') + '중대';
-      } else {
-        $('#sn-unit-in', w).value = p.unit;
-        if (p.company) $('#sn-company', w).value = p.company;
-      }
+      setUnitVal(p.unit, p.company || '');
       $('#sn-attend', w).value = 'auto';
     };
 
@@ -2334,9 +2422,10 @@ const Admin = {
     $('#sn-form', w).onsubmit = async e => {
       e.preventDefault();
       const name = $('#sn-name', w).value.replace(/\s/g, '');
-      const unit = $('#sn-unit-in', w).value.trim();
-      const company = $('#sn-company', w).value.trim();
-      if (!name || !unit) return Modal.alert('이름과 대대를 입력해 주세요.');
+      const unit = getUnitVal();
+      const company = getCompanyVal();
+      if (!name) return Modal.alert('이름을 입력해 주세요.');
+      if (!unit) return Modal.alert('대대를 선택하거나 직접 입력해 주세요.');
       const payload = {
         ...it,
         id: it.id,
