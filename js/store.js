@@ -981,6 +981,168 @@ const Store = {
     ];
   },
 
+  /* ---------- 📓 소나기 (소중한 나의 병영일기) 현황 ---------- */
+  normalizeSonagiItem(raw = {}) {
+    const pickPeriod = (st, en, txt) => {
+      const s = normalizeDate(st || '');
+      const e = normalizeDate(en || '');
+      if (txt && String(txt).trim()) return String(txt).trim();
+      if (s && e) return `${fmtYYMMDD(s)}~${fmtYYMMDD(e)}`;
+      if (s) return `${fmtYYMMDD(s)}~`;
+      if (e) return `~${fmtYYMMDD(e)}`;
+      return '';
+    };
+    const item = {
+      id: String(raw.id || uid()),
+      name: String(raw.name || '').replace(/\s/g, ''),
+      unit: String(raw.unit || '').trim(),
+      company: String(raw.company || '').trim(),
+      memberId: String(raw.memberId || ''),
+      churchAttend: ['auto', 'yes', 'no'].includes(raw.churchAttend) ? raw.churchAttend : 'auto',
+      bundleMode: ['separate', '1_2', '2_3', '1_2_3'].includes(raw.bundleMode) ? raw.bundleMode : 'separate',
+      s1Start: normalizeDate(raw.s1Start || ''),
+      s1End: normalizeDate(raw.s1End || ''),
+      s1Period: String(raw.s1Period || '').trim(),
+      s1Essay: !!raw.s1Essay,
+      s1Proposed: normalizeDate(raw.s1Proposed || ''),
+      s2Start: normalizeDate(raw.s2Start || ''),
+      s2End: normalizeDate(raw.s2End || ''),
+      s2Period: String(raw.s2Period || '').trim(),
+      s2Essay: !!raw.s2Essay,
+      s2Proposed: normalizeDate(raw.s2Proposed || ''),
+      s3Start: normalizeDate(raw.s3Start || ''),
+      s3End: normalizeDate(raw.s3End || ''),
+      s3Period: String(raw.s3Period || '').trim(),
+      s3Essay: !!raw.s3Essay,
+      s3Proposed: normalizeDate(raw.s3Proposed || ''),
+      memo: String(raw.memo || '').trim(),
+      createdAt: raw.createdAt || Date.now(),
+      updatedAt: raw.updatedAt || Date.now(),
+    };
+    item.s1Period = pickPeriod(item.s1Start, item.s1End, item.s1Period);
+    item.s2Period = pickPeriod(item.s2Start, item.s2End, item.s2Period);
+    item.s3Period = pickPeriod(item.s3Start, item.s3End, item.s3Period);
+    return item;
+  },
+
+  async sonagiList(peoplePreloaded = null) {
+    const s = (await DB.get('settings', 'main')) || {};
+    let arr = [];
+    if (s.sonagiJson) {
+      try { arr = JSON.parse(s.sonagiJson); } catch (e) { arr = []; }
+    }
+    if (!Array.isArray(arr)) arr = [];
+    const people = peoplePreloaded || await this.allPeopleFull();
+    const byId = Object.fromEntries(people.map(p => [String(p.id), p]));
+
+    return arr.map(raw => {
+      const it = this.normalizeSonagiItem(raw);
+      let matched = it.memberId ? byId[it.memberId] : null;
+      if (!matched && it.name) {
+        matched = people.find(p => p.name === it.name && (!it.unit || p.unit === it.unit || unitLabel(p) === it.unit));
+        if (!matched) {
+          const sameName = people.filter(p => p.name === it.name);
+          if (sameName.length === 1) matched = sameName[0];
+        }
+      }
+      const bm = it.bundleMode;
+      // 합산 모드에 따른 유효 기간/수기/건의 계산
+      const has1 = !!(it.s1Period || it.s1Start || it.s1End || it.s1Proposed || it.s1Essay);
+      const eff2Period = (bm === '1_2' || bm === '1_2_3') ? it.s1Period : it.s2Period;
+      const eff2Proposed = (bm === '1_2' || bm === '1_2_3') ? (it.s2Proposed || it.s1Proposed) : it.s2Proposed;
+      const eff2Essay = (bm === '1_2' || bm === '1_2_3') ? (it.s1Essay || it.s2Essay) : it.s2Essay;
+      const has2 = (bm === '1_2' || bm === '1_2_3') ? has1 : !!(it.s2Period || it.s2Start || it.s2End || it.s2Proposed || it.s2Essay);
+
+      const eff3Period = bm === '1_2_3' ? it.s1Period : (bm === '2_3' ? it.s2Period : it.s3Period);
+      const eff3Proposed = bm === '1_2_3' ? (it.s3Proposed || it.s1Proposed) : (bm === '2_3' ? (it.s3Proposed || it.s2Proposed) : it.s3Proposed);
+      const eff3Essay = bm === '1_2_3' ? (it.s1Essay || it.s3Essay) : (bm === '2_3' ? (it.s2Essay || it.s3Essay) : it.s3Essay);
+      const has3 = bm === '1_2_3' ? has1 : (bm === '2_3' ? has2 : !!(it.s3Period || it.s3Start || it.s3End || it.s3Proposed || it.s3Essay));
+
+      const isChurchMemberAttending = it.churchAttend === 'yes'
+        ? true
+        : (it.churchAttend === 'no' ? false : !!(matched && matched.total > 0));
+
+      // 미건의 / 수기 미제출 개수 (합산 제출은 1건의 행정 조치 단위로 집계)
+      let pendingProposals = 0;
+      let missingEssays = 0;
+      if (bm === '1_2') {
+        if (has1 && !(it.s1Proposed || it.s2Proposed)) pendingProposals++;
+        if (has1 && !(it.s1Essay || it.s2Essay)) missingEssays++;
+        if (has3 && !it.s3Proposed) pendingProposals++;
+        if (has3 && !it.s3Essay) missingEssays++;
+      } else if (bm === '2_3') {
+        if (has1 && !it.s1Proposed) pendingProposals++;
+        if (has1 && !it.s1Essay) missingEssays++;
+        if (has2 && !(it.s2Proposed || it.s3Proposed)) pendingProposals++;
+        if (has2 && !(it.s2Essay || it.s3Essay)) missingEssays++;
+      } else if (bm === '1_2_3') {
+        if (has1 && !(it.s1Proposed || it.s2Proposed || it.s3Proposed)) pendingProposals++;
+        if (has1 && !(it.s1Essay || it.s2Essay || it.s3Essay)) missingEssays++;
+      } else {
+        if (has1 && !it.s1Proposed) pendingProposals++;
+        if (has1 && !it.s1Essay) missingEssays++;
+        if (has2 && !it.s2Proposed) pendingProposals++;
+        if (has2 && !it.s2Essay) missingEssays++;
+        if (has3 && !it.s3Proposed) pendingProposals++;
+        if (has3 && !it.s3Essay) missingEssays++;
+      }
+
+      return {
+        ...it,
+        matchedMember: matched || null,
+        isChurchAttending: isChurchMemberAttending,
+        eff: {
+          has1, has2, has3,
+          s1Period: it.s1Period, s1Proposed: it.s1Proposed, s1Essay: it.s1Essay,
+          s2Period: eff2Period, s2Proposed: eff2Proposed, s2Essay: eff2Essay,
+          s3Period: eff3Period, s3Proposed: eff3Proposed, s3Essay: eff3Essay,
+        },
+        pendingProposals,
+        missingEssays,
+      };
+    }).sort((a, b) =>
+      b.pendingProposals - a.pendingProposals ||
+      String(a.unit).localeCompare(String(b.unit), 'ko') ||
+      String(a.company).localeCompare(String(b.company), 'ko') ||
+      String(a.name).localeCompare(String(b.name), 'ko')
+    );
+  },
+
+  async saveSonagiList(list, syncServer = true) {
+    const clean = (list || []).map(x => {
+      const { matchedMember, isChurchAttending, eff, pendingProposals, missingEssays, ...raw } = x;
+      return this.normalizeSonagiItem(raw);
+    });
+    const sonagiJson = JSON.stringify(clean);
+    const s = Object.assign(await this.settings(), { sonagiJson });
+    await DB.put('settings', s, 'main');
+    if (syncServer && typeof Backend !== 'undefined') {
+      await Backend.enqueue('saveSettings', { sonagiJson });
+    }
+    return clean;
+  },
+
+  async upsertSonagi(item) {
+    const s = (await DB.get('settings', 'main')) || {};
+    let arr = [];
+    try { arr = s.sonagiJson ? JSON.parse(s.sonagiJson) : []; } catch (e) { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    const norm = this.normalizeSonagiItem({ ...item, updatedAt: Date.now() });
+    const idx = arr.findIndex(x => String(x.id) === String(norm.id));
+    if (idx >= 0) arr[idx] = norm;
+    else arr.push(norm);
+    await this.saveSonagiList(arr);
+    return norm;
+  },
+
+  async deleteSonagi(id) {
+    const s = (await DB.get('settings', 'main')) || {};
+    let arr = [];
+    try { arr = s.sonagiJson ? JSON.parse(s.sonagiJson) : []; } catch (e) { arr = []; }
+    if (!Array.isArray(arr)) arr = [];
+    await this.saveSonagiList(arr.filter(x => String(x.id) !== String(id)));
+  },
+
   /* ---------- 백업 / 복원 (기기 교체·인계용) ---------- */
   async exportBackup() {
     const blobToDataURL = b => new Promise(r => { const fr = new FileReader(); fr.onload = () => r(fr.result); fr.readAsDataURL(b); });

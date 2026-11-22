@@ -12,6 +12,7 @@ const Admin = {
     ['members', '👥 형제 관리'],
     ['manual', '✍️ 수동 출석'],
     ['mileage', '🎖 마일리지'],
+    ['sonagi', '📓 소나기 현황'],
     ['import', '📥 엑셀 등록'],
     ['export', '📤 전체 엑셀 전송'],
     ['long_absent', '⏳ 장기결석자'],
@@ -31,10 +32,11 @@ const Admin = {
   async render() {
     this.urls.forEach(u => URL.revokeObjectURL(u)); this.urls = [];
     const open = (await Store.warnings()).filter(w => !w.resolved).length;
-    // 미건의 마일리지 대상자 수 계산하여 [🎖 마일리지] 탭에 배지로 표시
+    // 미건의 마일리지 & 소나기 건수 계산하여 탭 배지로 표시
     let pendingMilCount = 0;
+    let pendingSonagiCount = 0;
     try {
-      const [msAll, grAll] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
+      const [msAll, grAll, snAll] = await Promise.all([Store.membersWithStats(), Store.allGrants(), Store.sonagiList([])]);
       const gMap = {};
       grAll.forEach(g => (gMap[g.memberId] = gMap[g.memberId] || []).push(g));
       msAll.forEach(m => {
@@ -43,6 +45,7 @@ const Admin = {
         const granted = slots.filter(sl => sl.proposedDate).length;
         if (earned > granted) pendingMilCount += (earned - granted);
       });
+      pendingSonagiCount = snAll.reduce((s, r) => s + (r.pendingProposals || 0), 0);
     } catch (e) {}
 
     const isConn = typeof Backend !== 'undefined' && await Backend.isConfigured();
@@ -57,7 +60,7 @@ const Admin = {
           <button class="btn ghost" id="adm-exit">🔒 잠그고 나가기</button>
         </div>
       </header>
-      <nav class="tabs">${this.TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === this.tab ? 'on' : ''}">${l}${k === 'warnings' && open ? ` <span class="badge" style="background:var(--red)">${open}</span>` : ''}${k === 'mileage' && pendingMilCount ? ` <span class="badge" style="background:#dc2626;color:#fff">미건의 ${pendingMilCount}</span>` : ''}</button>`).join('')}</nav>
+      <nav class="tabs">${this.TABS.map(([k, l]) => `<button data-tab="${k}" class="${k === this.tab ? 'on' : ''}">${l}${k === 'warnings' && open ? ` <span class="badge" style="background:var(--red)">${open}</span>` : ''}${k === 'mileage' && pendingMilCount ? ` <span class="badge" style="background:#dc2626;color:#fff">미건의 ${pendingMilCount}</span>` : ''}${k === 'sonagi' && pendingSonagiCount ? ` <span class="badge" style="background:#dc2626;color:#fff">미건의 ${pendingSonagiCount}</span>` : ''}</button>`).join('')}</nav>
       <section class="adm-body" id="body"><p class="muted">불러오는 중…</p></section></div>`);
     $('#adm-exit').onclick = () => { if (typeof Backend !== 'undefined') Backend.lockSession(); App.home(); };
     $('#adm-sync-badge').onclick = () => this.open('settings');
@@ -1890,6 +1893,515 @@ const Admin = {
       Modal.close(w);
       this.render();
     };
+  },
+
+  /* ===================== 📓 소나기 현황 (소중한 나의 병영일기 · 24주/48주 제출 & 건의 관리) ===================== */
+  sonagiBundleLabel(bm) {
+    return {
+      separate: '개별 (24주씩)',
+      '1_2': '1·2차 48주 합산',
+      '2_3': '2·3차 48주 합산',
+      '1_2_3': '1~3차 72주 합산',
+    }[bm] || '개별 (24주씩)';
+  },
+
+  sonagiEssayLabel(r) {
+    const e = r.eff;
+    const bm = r.bundleMode;
+    const parts = [];
+    if (bm === '1_2') {
+      if (e.has1) parts.push(`1·2차 합산 ${e.s1Essay ? '✅ O (1편)' : '❌ 미제출'}`);
+      if (e.has3) parts.push(`3차 ${e.s3Essay ? '✅ O' : '❌ 미제출'}`);
+    } else if (bm === '2_3') {
+      if (e.has1) parts.push(`1차 ${e.s1Essay ? '✅ O' : '❌ 미제출'}`);
+      if (e.has2) parts.push(`2·3차 합산 ${e.s2Essay ? '✅ O (1편)' : '❌ 미제출'}`);
+    } else if (bm === '1_2_3') {
+      if (e.has1) parts.push(`1~3차 합산 ${e.s1Essay ? '✅ O (1편)' : '❌ 미제출'}`);
+    } else {
+      if (e.has1) parts.push(`1차 ${e.s1Essay ? '✅ O' : '❌ 미제출'}`);
+      if (e.has2) parts.push(`2차 ${e.s2Essay ? '✅ O' : '❌ 미제출'}`);
+      if (e.has3) parts.push(`3차 ${e.s3Essay ? '✅ O' : '❌ 미제출'}`);
+    }
+    return parts.length ? parts.join(' / ') : '<span class="muted">-</span>';
+  },
+
+  sonagiStageCellsHtml(r, stage) {
+    const bm = r.bundleMode;
+    const e = r.eff;
+    const active = stage === 1 ? e.has1 : (stage === 2 ? e.has2 : e.has3);
+    const period = stage === 1 ? e.s1Period : (stage === 2 ? e.s2Period : e.s3Period);
+    const proposed = stage === 1 ? e.s1Proposed : (stage === 2 ? e.s2Proposed : e.s3Proposed);
+
+    const isMirrored =
+      (stage === 2 && (bm === '1_2' || bm === '1_2_3')) ||
+      (stage === 3 && (bm === '2_3' || bm === '1_2_3'));
+    const isBundleHead =
+      (stage === 1 && (bm === '1_2' || bm === '1_2_3')) ||
+      (stage === 2 && bm === '2_3');
+
+    if (!active) return '<td></td><td></td>';
+
+    const bundleTag = isBundleHead
+      ? `<div><span class="badge" style="background:#2563eb;font-size:.68rem;margin:0">${bm === '1_2_3' ? '72주 합산' : '48주 합산'}</span></div>`
+      : (isMirrored ? `<div class="muted" style="font-size:.7rem">↳ ${bm === '1_2' ? '1·2차 합산' : (bm === '2_3' ? '2·3차 합산' : '전체 합산')}</div>` : '');
+
+    const pCell = `<td>${esc(period || '-')}${bundleTag}</td>`;
+    const isPending = !proposed;
+    const propCell = isPending
+      ? `<td class="mil-pending-cell"><span style="color:#dc2626;font-weight:800">미건의</span></td>`
+      : `<td class="mil-date-cell">${fmtYYMMDD(proposed)}</td>`;
+    return pCell + propCell;
+  },
+
+  async tab_sonagi(body) {
+    const people = await Store.allPeopleFull();
+    const list = await Store.sonagiList(people);
+    const pendingTotal = list.reduce((s, r) => s + r.pendingProposals, 0);
+    const essayMissingTotal = list.reduce((s, r) => s + r.missingEssays, 0);
+    const churchCnt = list.filter(r => r.isChurchAttending).length;
+    const nonChurchCnt = list.length - churchCnt;
+
+    // 등록된 대대 목록 (필터 칩 + 드롭다운용)
+    const unitSet = [...new Set(list.map(r => r.unit).filter(Boolean))].sort((a, b) => a.localeCompare(b, 'ko'));
+
+    body.innerHTML = `
+      <div class="note">
+        <b>소나기 (소중한 나의 병영일기)</b> 제출 및 휴가 건의 현황 관리 탭입니다. (예배 출석 여부와 무관하게 모든 부대 형제 등록 가능)<br>
+        · 24주씩 1차·2차·3차로 각각 제출하거나, <b>48주(1·2차 또는 2·3차) / 72주(1~3차)</b>를 한 번에 몰아서 제출(+수기 1편)하는 경우 모두 지원됩니다.
+      </div>
+      <div class="card" style="margin-bottom:.8rem;padding:.85rem 1rem;background:#f8fafc;border:1.5px solid #cbd5e1">
+        <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.5rem">
+          <div style="font-weight:800;color:var(--navy)">
+            📓 총 <b>${list.length}명</b>
+            (교회출석 <b style="color:var(--green)">${churchCnt}명</b> · 미출석 <b>${nonChurchCnt}명</b>) ·
+            미건의 <b class="${pendingTotal ? 'red' : ''}">${pendingTotal}건</b> ·
+            수기 미제출 <b class="${essayMissingTotal ? 'red' : ''}">${essayMissingTotal}건</b>
+          </div>
+          <div style="display:flex;gap:.45rem;flex-wrap:wrap">
+            <button type="button" class="btn primary small" id="sn-add">➕ 소나기 제출자 등록</button>
+            <button type="button" class="btn ghost small" id="sn-xl">📊 소나기 현황 엑셀(.xlsx) 다운로드</button>
+          </div>
+        </div>
+        ${unitSet.length ? `
+          <div class="chips" style="margin:0">
+            <button type="button" class="td-unit-chip ${!this.snUnit ? 'on' : ''}" data-sn-chip="">전체 보기 (${list.length}명)</button>
+            ${unitSet.map(u => `
+              <button type="button" class="td-unit-chip ${this.snUnit === u ? 'on' : ''}" data-sn-chip="${esc(u)}">${esc(u)}: <b>${list.filter(r => r.unit === u).length}명</b></button>
+            `).join('')}
+          </div>` : ''}
+      </div>
+
+      <div class="toolbar">
+        <select id="sn-unit">
+          <option value="">전체 대대</option>
+          ${unitSet.map(u => `<option value="${esc(u)}" ${this.snUnit === u ? 'selected' : ''}>${esc(u)}</option>`).join('')}
+        </select>
+        <input id="sn-q" placeholder="이름·대대·중대 검색" value="${esc(this.snQ || '')}" style="max-width:190px">
+        <select id="sn-att-filter">
+          <option value="">출석 여부 전체</option>
+          <option value="yes" ${this.snAttFilter === 'yes' ? 'selected' : ''}>교회 출석자만</option>
+          <option value="no" ${this.snAttFilter === 'no' ? 'selected' : ''}>교회 미출석자만</option>
+        </select>
+        <label><input type="checkbox" id="sn-only-pend" ${this.snOnlyPend ? 'checked' : ''}> 미건의만 보기</label>
+        <label><input type="checkbox" id="sn-only-essay" ${this.snOnlyEssay ? 'checked' : ''}> 수기 미제출만 보기</label>
+      </div>
+      <div id="sn-table-wrap"></div>`;
+
+    let filteredList = [];
+    const drawTable = () => {
+      this.snUnit = $('#sn-unit').value;
+      this.snQ = $('#sn-q').value.trim();
+      this.snAttFilter = $('#sn-att-filter').value;
+      this.snOnlyPend = $('#sn-only-pend').checked;
+      this.snOnlyEssay = $('#sn-only-essay').checked;
+
+      $$('[data-sn-chip]', body).forEach(b => b.classList.toggle('on', b.dataset.snChip === (this.snUnit || '')));
+
+      filteredList = list.filter(r => {
+        if (this.snUnit && r.unit !== this.snUnit) return false;
+        if (this.snQ) {
+          const hay = `${r.name} ${r.unit} ${r.company}`;
+          if (!hay.includes(this.snQ)) return false;
+        }
+        if (this.snAttFilter === 'yes' && !r.isChurchAttending) return false;
+        if (this.snAttFilter === 'no' && r.isChurchAttending) return false;
+        if (this.snOnlyPend && r.pendingProposals === 0) return false;
+        if (this.snOnlyEssay && r.missingEssays === 0) return false;
+        return true;
+      });
+
+      $('#sn-table-wrap').innerHTML = filteredList.length ? `
+        <p class="muted" style="margin:.2rem 0 .5rem">표시 중: <b>${filteredList.length}명</b> (미건의: <b class="red">${filteredList.filter(x => x.pendingProposals > 0).length}명</b>)</p>
+        <div class="tbl-wrap">
+          <table class="mil-tbl sn-tbl">
+            <thead>
+              <tr>
+                <th rowspan="2" class="mil-base-th">연번</th>
+                <th rowspan="2" class="mil-base-th">이름</th>
+                <th rowspan="2" class="mil-base-th">대대</th>
+                <th rowspan="2" class="mil-base-th">중대</th>
+                <th colspan="2" class="mil-stage-th">1차 (24주)</th>
+                <th colspan="2" class="mil-stage-th">2차 (48주)</th>
+                <th colspan="2" class="mil-stage-th">3차 (72주)</th>
+                <th rowspan="2" class="mil-base-th">교회출석여부</th>
+                <th rowspan="2" class="mil-base-th">수기제출</th>
+                <th rowspan="2" class="mil-base-th">관리</th>
+              </tr>
+              <tr>
+                <th class="mil-sub-th">1차 작성기간</th><th class="mil-sub-th">1차 건의</th>
+                <th class="mil-sub-th">2차 작성기간</th><th class="mil-sub-th">2차 건의</th>
+                <th class="mil-sub-th">3차 작성기간</th><th class="mil-sub-th">3차 건의</th>
+              </tr>
+            </thead>
+            <tbody>
+              ${filteredList.map((r, idx) => {
+                const nameHtml = r.matchedMember
+                  ? this.memberLink(r.matchedMember.id, r.name)
+                  : `<b>${esc(r.name)}</b>`;
+                let churchHtml = '';
+                if (r.isChurchAttending) {
+                  churchHtml = r.matchedMember
+                    ? `<span class="badge" style="background:var(--green);margin:0">출석 (${r.matchedMember.total}회${r.matchedMember.discharged ? '·전역' : ''})</span>`
+                    : `<span class="badge" style="background:var(--green);margin:0">출석(수동)</span>`;
+                } else {
+                  churchHtml = `<span class="badge gray" style="margin:0">미출석</span>`;
+                }
+                return `
+                  <tr>
+                    <td>${idx + 1}</td>
+                    <td>${nameHtml}</td>
+                    <td>${esc(r.unit || '-')}</td>
+                    <td><b>${esc(r.company || '-')}</b></td>
+                    ${this.sonagiStageCellsHtml(r, 1)}
+                    ${this.sonagiStageCellsHtml(r, 2)}
+                    ${this.sonagiStageCellsHtml(r, 3)}
+                    <td>${churchHtml}</td>
+                    <td>${this.sonagiEssayLabel(r)}</td>
+                    <td class="nowrap">
+                      <button type="button" class="btn small primary" data-sn-edit="${r.id}">수정·입력</button>
+                      ${r.pendingProposals > 0 ? `<button type="button" class="btn small primary" style="background:#16a34a" data-sn-prop-now="${r.id}">✔ 오늘건의</button>` : ''}
+                      <button type="button" class="btn small danger" data-sn-del="${r.id}">삭제</button>
+                    </td>
+                  </tr>`;
+              }).join('')}
+            </tbody>
+          </table>
+        </div>` : `
+        <div class="card" style="text-align:center;padding:2rem 1rem">
+          <p class="muted" style="margin:0 0 .8rem">${list.length ? '조건에 해당하는 인원이 없습니다.' : '아직 등록된 소나기 제출자가 없습니다.'}</p>
+          ${!list.length ? `<button type="button" class="btn primary" id="sn-add-empty">➕ 첫 소나기 제출자 등록하기</button>` : ''}
+        </div>`;
+
+      this.bindMemberHistoryLinks($('#sn-table-wrap'));
+      if ($('#sn-add-empty')) $('#sn-add-empty').onclick = () => this.openSonagiModal(null, people, list);
+
+      $$('[data-sn-edit]', $('#sn-table-wrap')).forEach(b => b.onclick = () => {
+        const target = list.find(x => String(x.id) === String(b.dataset.snEdit));
+        if (target) this.openSonagiModal(target, people, list);
+      });
+      $$('[data-sn-prop-now]', $('#sn-table-wrap')).forEach(b => b.onclick = async () => {
+        const target = list.find(x => String(x.id) === String(b.dataset.snPropNow));
+        if (!target) return;
+        const tStr = todayStr();
+        if (!await Modal.confirm(`<b>${esc(target.unit)} ${esc(target.company)} ${esc(target.name)}</b> 형제의 미건의 소나기 내역을 오늘(${fmtYYMMDD(tStr)}) 건의완료로 저장할까요?`, '오늘 날짜로 건의 저장')) return;
+        const patch = { ...target };
+        const e = target.eff;
+        if (e.has1 && !patch.s1Proposed) patch.s1Proposed = tStr;
+        if (e.has2 && !patch.s2Proposed && patch.bundleMode !== '1_2' && patch.bundleMode !== '1_2_3') patch.s2Proposed = tStr;
+        if (e.has3 && !patch.s3Proposed && patch.bundleMode !== '2_3' && patch.bundleMode !== '1_2_3') patch.s3Proposed = tStr;
+        await Store.upsertSonagi(patch);
+        this.render();
+      });
+      $$('[data-sn-del]', $('#sn-table-wrap')).forEach(b => b.onclick = async () => {
+        const target = list.find(x => String(x.id) === String(b.dataset.snDel));
+        if (!target) return;
+        if (!await Modal.confirm(`<b>${esc(target.unit)} ${esc(target.company)} ${esc(target.name)}</b> 형제의 소나기 기록을 삭제할까요?`, '삭제')) return;
+        await Store.deleteSonagi(target.id);
+        this.render();
+      });
+    };
+
+    $$('[data-sn-chip]', body).forEach(b => b.onclick = () => {
+      $('#sn-unit').value = (b.dataset.snChip && this.snUnit === b.dataset.snChip) ? '' : b.dataset.snChip;
+      drawTable();
+    });
+    $('#sn-add').onclick = () => this.openSonagiModal(null, people, list);
+    $('#sn-xl').onclick = () => this.exportSonagiExcel(filteredList.length ? filteredList : list);
+    $('#sn-unit').onchange = drawTable;
+    $('#sn-q').oninput = drawTable;
+    $('#sn-att-filter').onchange = drawTable;
+    $('#sn-only-pend').onchange = drawTable;
+    $('#sn-only-essay').onchange = drawTable;
+
+    drawTable();
+  },
+
+  /** 소나기 등록/수정 모달 (개별 24주 / 48주 한번에 / 72주 한번에 지원) */
+  openSonagiModal(item = null, people = [], existingList = []) {
+    const it = item || Store.normalizeSonagiItem({});
+    const unitOptions = [...new Set([
+      ...CONFIG.units.map(u => u.name),
+      '608수송대대',
+      ...existingList.map(x => x.unit).filter(Boolean),
+    ])];
+    const sortedPeople = (people || []).slice().sort((a, b) =>
+      (a.discharged === b.discharged ? 0 : (a.discharged ? 1 : -1)) ||
+      unitOrder(unitLabel(a)) - unitOrder(unitLabel(b)) ||
+      koSort(a, b)
+    );
+
+    const calcWeeksHint = (s, e) => {
+      if (!s || !e) return '';
+      const d1 = new Date(s + 'T00:00:00');
+      const d2 = new Date(e + 'T00:00:00');
+      const days = Math.round((d2 - d1) / 864e5);
+      if (isNaN(days) || days < 0) return '';
+      return `약 ${Math.max(1, Math.round(days / 7))}주`;
+    };
+
+    const w = Modal.open(`
+      <h3>📓 소나기 현황 ${item ? '수정' : '등록'}</h3>
+      <form class="mform" id="sn-form">
+        <label style="font-size:.85rem">🔍 교회 출석 명단에서 바로 불러오기 (미출석 인원이면 선택 안 함)
+          <select id="sn-pick-member">
+            <option value="">-- 직접 입력 (교회 미출석자 / 신규) --</option>
+            ${sortedPeople.map(p => `<option value="${p.id}" ${String(it.memberId) === String(p.id) ? 'selected' : ''}>[${esc(unitLabel(p))}] ${esc(p.name)} (${p.total}회 출석${p.discharged ? '·전역' : ''})</option>`).join('')}
+          </select>
+        </label>
+        <div class="two" style="grid-template-columns:1fr 1fr 1fr">
+          <label>이름 <input id="sn-name" value="${esc(it.name)}" placeholder="예) 홍길동" required></label>
+          <label>대대
+            <input id="sn-unit-in" list="sn-unit-dl" value="${esc(it.unit)}" placeholder="예) 18보급대대" required>
+            <datalist id="sn-unit-dl">${unitOptions.map(u => `<option value="${esc(u)}">`).join('')}</datalist>
+          </label>
+          <label>중대 (필수 확인) <input id="sn-company" value="${esc(it.company)}" placeholder="예) 2중대, 본부중대"></label>
+        </div>
+        <div class="two">
+          <label>교회출석여부
+            <select id="sn-attend">
+              <option value="auto" ${it.churchAttend === 'auto' ? 'selected' : ''}>자동 판별 (출석 명단 대조)</option>
+              <option value="yes" ${it.churchAttend === 'yes' ? 'selected' : ''}>출석 (수동 지정)</option>
+              <option value="no" ${it.churchAttend === 'no' ? 'selected' : ''}>미출석 (수동 지정)</option>
+            </select>
+          </label>
+          <label>제출 형태 (개별 vs 몰아서 합산)
+            <select id="sn-bundle">
+              <option value="separate" ${it.bundleMode === 'separate' ? 'selected' : ''}>개별 제출 (1·2·3차 24주씩 각각)</option>
+              <option value="1_2" ${it.bundleMode === '1_2' ? 'selected' : ''}>⚡ 1·2차 48주 한번에 제출 (수기 1편 합산)</option>
+              <option value="2_3" ${it.bundleMode === '2_3' ? 'selected' : ''}>⚡ 2·3차 48주 한번에 제출 (1차 별도 · 수기 1편)</option>
+              <option value="1_2_3" ${it.bundleMode === '1_2_3' ? 'selected' : ''}>⚡ 1~3차 72주 한번에 제출 (수기 1편 합산)</option>
+            </select>
+          </label>
+        </div>
+
+        ${[1, 2, 3].map(st => {
+          const stVal = it[`s${st}Start`];
+          const enVal = it[`s${st}End`];
+          const pTxt = it[`s${st}Period`];
+          const essVal = it[`s${st}Essay`];
+          const propVal = it[`s${st}Proposed`];
+          return `
+            <div class="sn-stage-card" id="sn-card-${st}">
+              <div class="sn-stage-head">
+                <span id="sn-title-${st}">${st}차 (${st * 24}주 누적 구간)</span>
+                <span class="badge" id="sn-wk-${st}" style="background:#334155">${calcWeeksHint(stVal, enVal) || '기간 입력'}</span>
+              </div>
+              <div id="sn-mirror-msg-${st}" class="muted" style="display:none;font-size:.84rem;padding:.3rem 0"></div>
+              <div id="sn-fields-${st}">
+                <div class="sn-period-row">
+                  <label style="margin:0;font-size:.78rem">작성 시작일
+                    <input type="date" id="sn-s${st}-start" value="${esc(stVal)}">
+                  </label>
+                  <label style="margin:0;font-size:.78rem">작성 종료일
+                    <input type="date" id="sn-s${st}-end" value="${esc(enVal)}">
+                  </label>
+                  <label style="margin:0;font-size:.78rem">표시 작성기간 (직접 수정 가능)
+                    <input type="text" id="sn-s${st}-period" value="${esc(pTxt)}" placeholder="예) 26.01.05~26.06.21">
+                  </label>
+                </div>
+                <div class="sn-prop-row">
+                  <label style="display:flex;flex-direction:row;align-items:center;gap:.35rem;margin:0;font-size:.84rem;cursor:pointer">
+                    <input type="checkbox" id="sn-s${st}-essay" ${essVal ? 'checked' : ''} style="width:18px;height:18px"> 수기 제출 완료
+                  </label>
+                  <label style="display:flex;flex-direction:row;align-items:center;gap:.4rem;margin:0;font-size:.82rem">
+                    건의일:
+                    <input type="date" id="sn-s${st}-prop" value="${esc(propVal)}" style="padding:.32em .45em">
+                  </label>
+                  <button type="button" class="btn small ghost" data-sn-today="${st}">오늘날짜</button>
+                  <button type="button" class="btn small ghost" data-sn-clr="${st}">비우기</button>
+                </div>
+              </div>
+            </div>`;
+        }).join('')}
+
+        <label>비고 (선택) <input id="sn-memo" value="${esc(it.memo)}" placeholder="예) 48주 일괄 제출로 수기 1편과 함께 2일분 건의"></label>
+        <div class="modal-actions">
+          <button type="button" class="btn ghost" id="sn-c">취소</button>
+          <button type="submit" class="btn primary">저장하기</button>
+        </div>
+      </form>`, 'wide');
+
+    const updateBundleUi = () => {
+      const bm = $('#sn-bundle', w).value;
+      const setCardState = (st, title, mirrorMsg) => {
+        const card = $(`#sn-card-${st}`, w);
+        const fields = $(`#sn-fields-${st}`, w);
+        const msgEl = $(`#sn-mirror-msg-${st}`, w);
+        $(`#sn-title-${st}`, w).textContent = title;
+        card.classList.remove('bundled', 'mirrored');
+        if (mirrorMsg) {
+          card.classList.add('mirrored');
+          fields.style.display = 'none';
+          msgEl.style.display = 'block';
+          msgEl.textContent = mirrorMsg;
+        } else {
+          if ((st === 1 && (bm === '1_2' || bm === '1_2_3')) || (st === 2 && bm === '2_3')) {
+            card.classList.add('bundled');
+          }
+          fields.style.display = 'block';
+          msgEl.style.display = 'none';
+        }
+      };
+
+      if (bm === '1_2') {
+        setCardState(1, '⚡ 1·2차 통합 제출 (48주 · 수기 1편 → 2일 건의)', '');
+        setCardState(2, '2차 (1·2차 48주 합산에 포함됨)', '↳ 위 [1·2차 48주 통합 제출]의 작성기간·수기·건의일이 2차에도 자동 함께 반영됩니다.');
+        setCardState(3, '3차 (72주 누적 · 추후 개별 추가 가능)', '');
+      } else if (bm === '2_3') {
+        setCardState(1, '1차 (24주 개별)', '');
+        setCardState(2, '⚡ 2·3차 통합 제출 (48주 · 수기 1편 → 2일 건의)', '');
+        setCardState(3, '3차 (2·3차 48주 합산에 포함됨)', '↳ 위 [2·3차 48주 통합 제출]의 작성기간·수기·건의일이 3차에도 자동 함께 반영됩니다.');
+      } else if (bm === '1_2_3') {
+        setCardState(1, '⚡ 1~3차 전체 통합 제출 (72주 · 수기 1편 → 3일 건의)', '');
+        setCardState(2, '2차 (1~3차 72주 합산에 포함됨)', '↳ 위 [1~3차 통합 제출]에 자동 포함됩니다.');
+        setCardState(3, '3차 (1~3차 72주 합산에 포함됨)', '↳ 위 [1~3차 통합 제출]에 자동 포함됩니다.');
+      } else {
+        setCardState(1, '1차 (24주)', '');
+        setCardState(2, '2차 (48주 누적)', '');
+        setCardState(3, '3차 (72주 누적)', '');
+      }
+    };
+
+    $('#sn-bundle', w).onchange = updateBundleUi;
+    updateBundleUi();
+
+    [1, 2, 3].forEach(st => {
+      const sIn = $(`#sn-s${st}-start`, w);
+      const eIn = $(`#sn-s${st}-end`, w);
+      const pIn = $(`#sn-s${st}-period`, w);
+      const wkBadge = $(`#sn-wk-${st}`, w);
+      const syncPeriodFromDates = () => {
+        const sv = sIn.value, ev = eIn.value;
+        if (sv && ev) pIn.value = `${fmtYYMMDD(sv)}~${fmtYYMMDD(ev)}`;
+        else if (sv) pIn.value = `${fmtYYMMDD(sv)}~`;
+        else if (ev) pIn.value = `~${fmtYYMMDD(ev)}`;
+        wkBadge.textContent = calcWeeksHint(sv, ev) || '기간 입력';
+      };
+      sIn.onchange = syncPeriodFromDates;
+      eIn.onchange = syncPeriodFromDates;
+    });
+
+    $$('[data-sn-today]', w).forEach(b => b.onclick = () => {
+      $(`#sn-s${b.dataset.snToday}-prop`, w).value = todayStr();
+    });
+    $$('[data-sn-clr]', w).forEach(b => b.onclick = () => {
+      const st = b.dataset.snClr;
+      $(`#sn-s${st}-start`, w).value = '';
+      $(`#sn-s${st}-end`, w).value = '';
+      $(`#sn-s${st}-period`, w).value = '';
+      $(`#sn-s${st}-essay`, w).checked = false;
+      $(`#sn-s${st}-prop`, w).value = '';
+      $(`#sn-wk-${st}`, w).textContent = '기간 입력';
+    });
+
+    $('#sn-pick-member', w).onchange = e => {
+      const pid = e.target.value;
+      if (!pid) return;
+      const p = sortedPeople.find(x => String(x.id) === String(pid));
+      if (!p) return;
+      $('#sn-name', w).value = p.name;
+      if (String(p.unit).startsWith('608')) {
+        $('#sn-unit-in', w).value = '608수송대대';
+        $('#sn-company', w).value = p.unit.replace('608', '') + '중대';
+      } else {
+        $('#sn-unit-in', w).value = p.unit;
+        if (p.company) $('#sn-company', w).value = p.company;
+      }
+      $('#sn-attend', w).value = 'auto';
+    };
+
+    $('#sn-c', w).onclick = () => Modal.close(w);
+    $('#sn-form', w).onsubmit = async e => {
+      e.preventDefault();
+      const name = $('#sn-name', w).value.replace(/\s/g, '');
+      const unit = $('#sn-unit-in', w).value.trim();
+      const company = $('#sn-company', w).value.trim();
+      if (!name || !unit) return Modal.alert('이름과 대대를 입력해 주세요.');
+      const payload = {
+        ...it,
+        id: it.id,
+        memberId: $('#sn-pick-member', w).value || '',
+        name,
+        unit,
+        company,
+        churchAttend: $('#sn-attend', w).value,
+        bundleMode: $('#sn-bundle', w).value,
+        s1Start: $('#sn-s1-start', w).value,
+        s1End: $('#sn-s1-end', w).value,
+        s1Period: $('#sn-s1-period', w).value.trim(),
+        s1Essay: $('#sn-s1-essay', w).checked,
+        s1Proposed: $('#sn-s1-prop', w).value,
+        s2Start: $('#sn-s2-start', w).value,
+        s2End: $('#sn-s2-end', w).value,
+        s2Period: $('#sn-s2-period', w).value.trim(),
+        s2Essay: $('#sn-s2-essay', w).checked,
+        s2Proposed: $('#sn-s2-prop', w).value,
+        s3Start: $('#sn-s3-start', w).value,
+        s3End: $('#sn-s3-end', w).value,
+        s3Period: $('#sn-s3-period', w).value.trim(),
+        s3Essay: $('#sn-s3-essay', w).checked,
+        s3Proposed: $('#sn-s3-prop', w).value,
+        memo: $('#sn-memo', w).value.trim(),
+      };
+      await Store.upsertSonagi(payload);
+      Modal.close(w);
+      this.render();
+    };
+  },
+
+  exportSonagiExcel(list) {
+    if (typeof XLSX === 'undefined') return Modal.alert('엑셀 도구를 불러오지 못했습니다.');
+    const aoa = [
+      ['연번', '이름', '대대', '중대', '제출형태', '1차 작성기간', '1차 건의', '2차 작성기간', '2차 건의', '3차 작성기간', '3차 건의', '교회출석여부', '수기제출', '비고'],
+    ];
+    const tmpDiv = document.createElement('div');
+    (list || []).forEach((r, idx) => {
+      tmpDiv.innerHTML = this.sonagiEssayLabel(r);
+      const essayTxt = tmpDiv.textContent.trim();
+      const churchTxt = r.isChurchAttending
+        ? (r.matchedMember ? `출석(${r.matchedMember.total}회)` : '출석(수동)')
+        : '미출석';
+      const propFmt = (has, pDate) => (!has ? '' : (pDate ? fmtYYMMDD(pDate) : '미건의'));
+      aoa.push([
+        idx + 1,
+        r.name,
+        r.unit,
+        r.company,
+        this.sonagiBundleLabel(r.bundleMode),
+        r.eff.has1 ? (r.eff.s1Period || '-') : '',
+        propFmt(r.eff.has1, r.eff.s1Proposed),
+        r.eff.has2 ? (r.eff.s2Period || '-') : '',
+        propFmt(r.eff.has2, r.eff.s2Proposed),
+        r.eff.has3 ? (r.eff.s3Period || '-') : '',
+        propFmt(r.eff.has3, r.eff.s3Proposed),
+        churchTxt,
+        essayTxt,
+        r.memo || '',
+      ]);
+    });
+    const wb = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '소나기현황');
+    XLSX.writeFile(wb, `천군교회_소나기현황_${todayStr()}.xlsx`);
   },
 
   normalizeUnitAndCompany(rawUnit, rawCompany = '') {
