@@ -996,19 +996,25 @@ const Admin = {
       const pastRaw = $('#mf-past', w).value.trim();
       const parsedPast = Store.parseDateList(pastRaw);
       const bcInput = +$('#mf-bc', w).value || 0;
-      const origPastLen = Array.isArray(v.pastDates) ? v.pastDates.length : 0;
-      const finalPast = pastRaw ? parsedPast : (bcInput === 0 ? [] : (v.pastDates || []));
-      const finalBc = (pastRaw && parsedPast.length !== origPastLen && bcInput === (v.baseCount || 0))
-        ? parsedPast.length
-        : bcInput;
+      const origPast = Array.isArray(v.pastDates) ? v.pastDates : [];
+      const origPastStr = origPast.map(fmtYYMMDD).join(', ');
+      const pastTextChanged = pastRaw !== origPastStr;
+      const finalPast = pastTextChanged ? parsedPast : origPast.slice();
+      const bcChanged = bcInput !== (v.baseCount || 0);
+      const finalBc = (pastTextChanged && !bcChanged) ? finalPast.length : bcInput;
+      const didEditPast = !!(m && (pastTextChanged || bcChanged));
+      const calcBaseLast = finalPast.filter(d => !isUnknownDate(d)).sort().pop() || null;
+      const blInput = $('#mf-bl', w).value || null;
+      const finalBaseLast = (didEditPast && blInput === (v.baseLastDate || null)) ? calcBaseLast : blInput;
       const data = {
         ...this.parseUnit(uv),
         name: $('#mf-name', w).value.replace(/\s/g, ''),
         dischargeDate: $('#mf-dc', w).value,
         baseCount: finalBc,
         baseGrantedBlocks: normSlots.reduce((mx, sl) => Math.max(mx, sl.stage), 0),
-        baseLastDate: $('#mf-bl', w).value || null,
+        baseLastDate: finalBaseLast,
         pastDates: finalPast,
+        pastDatesEdited: didEditPast ? true : !!v.pastDatesEdited,
         mileageSlots: normSlots,
       };
       if (m) {
@@ -1081,7 +1087,7 @@ const Admin = {
 
   /** 특정 형제의 특정 24회차 블록에 대한 요약, 사진 목록, 개별 .jpg 및 통합 증빙 시트 .jpg 생성 */
   async buildBrotherBlockAssets(m, stageOpt = null) {
-    if (m.grants === undefined) {
+    if (m && m.id) {
       const fresh = (await Store.allPeopleFull()).find(p => String(p.id) === String(m.id));
       if (fresh) m = fresh;
     }
@@ -1176,12 +1182,17 @@ const Admin = {
         const extraTag = att && att.manual
           ? `<span class="badge" title="${esc(att.reason || '')}">수동</span>`
           : (att && att.hasPhoto ? `<span class="badge gray" title="사진은 촬영 기기에 저장됨">타기기📷</span>` : '');
+        const delBtnHtml = (!readOnly && att)
+          ? `<button type="button" class="btn small danger" style="padding:.1em .4em;font-size:.7rem" data-del="${att.id}">삭제</button>`
+          : ((!readOnly && !att && e.isPast)
+            ? `<button type="button" class="btn small danger" style="padding:.1em .4em;font-size:.7rem" data-del-past="${e.pastIndex}" data-del-date="${esc(e.date)}">삭제</button>`
+            : '');
         buf.push(`
           <div class="hist-date-only ${cls}">
             <span class="ord">${e.ord}회</span>
             <span class="dt">${esc(dtStr)}</span>
             ${extraTag}
-            ${(!readOnly && att) ? `<button type="button" class="btn small danger" style="padding:.1em .4em;font-size:.7rem" data-del="${att.id}">삭제</button>` : ''}
+            ${delBtnHtml}
           </div>`);
       }
     });
@@ -1302,12 +1313,23 @@ const Admin = {
     }
 
     $$('[data-del]', w).forEach(b => b.onclick = async () => {
-      if (!await Modal.confirm('이 출석 기록(사진 포함)을 삭제할까요?', '삭제')) return;
+      if (!await Modal.confirm('이 출석 기록(사진 포함)을 삭제할까요?<br><span class="muted">전체 출석 횟수와 1~24 · 25~48 · 49~72 · 73~96 회차 배치가 즉시 재계산됩니다. (기존 마일리지 건의일은 유지됩니다)</span>', '삭제')) return;
       await Store.deleteAttendance(b.dataset.del);
       Modal.close(w);
-      this.render();
+      await this.render();
       const fresh = (await Store.allPeopleFull()).find(p => String(p.id) === String(person.id));
-      if (fresh) this.history(fresh, !!fresh.discharged, stage);
+      if (fresh) await this.history(fresh, !!fresh.discharged, stage);
+    });
+
+    $$('[data-del-past]', w).forEach(b => b.onclick = async () => {
+      const dt = b.dataset.delDate || '';
+      const label = (!dt || isUnknownDate(dt)) ? '날짜 미상(00.00.00)' : `${fmtYYMMDD(dt)}(${weekdayOf(dt)})`;
+      if (!await Modal.confirm(`<b>${esc(unitLabel(person))} ${esc(person.name)}</b> 형제의 과거 출석 기록(<b>${esc(label)}</b>)을 삭제할까요?<br><span class="muted">전체 출석 횟수와 1~24 · 25~48 · 49~72 · 73~96 회차 배치가 즉시 재계산됩니다. (기존 마일리지 건의일은 유지됩니다)</span>`, '삭제')) return;
+      await Store.deletePastDate(person.id, Number(b.dataset.delPast), dt);
+      Modal.close(w);
+      await this.render();
+      const fresh = (await Store.allPeopleFull()).find(p => String(p.id) === String(person.id));
+      if (fresh) await this.history(fresh, !!fresh.discharged, stage);
     });
   },
 

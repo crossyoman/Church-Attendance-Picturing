@@ -87,8 +87,19 @@ function fmtKorMD(v) {
   return `${+m}월${+d}일`;
 }
 
-const HISTORY_SEED_REV = 2026112501;
+const HISTORY_SEED_REV = 2026112502;
 const SYS_ATT_SEED_REV = 2026111502;
+
+/** 사용자가 명시적으로 삭제한 시드 출석 날짜를 1회씩 제외 */
+function applyExcludedDates(seedDates, excludedDates) {
+  const dates = Array.isArray(seedDates) ? seedDates.slice() : [];
+  for (const d of (excludedDates || [])) {
+    if (!d) continue;
+    const idx = dates.lastIndexOf(d);
+    if (idx >= 0) dates.splice(idx, 1);
+  }
+  return dates;
+}
 
 /** 앱 출석 기록(m.atts)과 겹치는 날짜를 과거 출석일자 목록에서 1회씩 제외해 중복 합산을 방지 */
 function dedupePastDates(seedDates, atts) {
@@ -430,15 +441,106 @@ const Store = {
   },
 
   async deleteAttendance(id, syncServer = true) {
+    const existing = await DB.get('attendance', id);
     await DB.del('attendance', id);
     await DB.del('photos', id);
+
+    // 삭제한 출석 날짜가 초기 시드(SEED_PEOPLE_HISTORY / SEED_SYSTEM_ATTENDANCE)에 포함된 날짜라면
+    // 이후 동기화·시드 재적용 시 과거 출석(pastDates)으로 되살아나 횟수가 복구되는 현상을 영구 방지
+    let updatedMember = null;
+    if (existing && existing.memberId && existing.date) {
+      const m = await DB.get('members', existing.memberId);
+      if (m) {
+        const seeds = (typeof window !== 'undefined' && Array.isArray(window.SEED_PEOPLE_HISTORY))
+          ? window.SEED_PEOPLE_HISTORY : [];
+        const sysAtts = (typeof window !== 'undefined' && Array.isArray(window.SEED_SYSTEM_ATTENDANCE))
+          ? window.SEED_SYSTEM_ATTENDANCE : [];
+        const seed = seeds.find(p => !p.discharged && p.unit === m.unit && p.name === m.name);
+        const seedDateCnt = (seed && Array.isArray(seed.dates))
+          ? seed.dates.filter(d => d === existing.date).length : 0;
+        const sysDateCnt = sysAtts.some(sa => sa.unit === m.unit && sa.name === m.name && sa.date === existing.date) ? 1 : 0;
+        const maxSeedOcc = Math.max(seedDateCnt, sysDateCnt);
+
+        let memberChanged = false;
+        if (maxSeedOcc > 0) {
+          const excl = Array.isArray(m.excludedSeedDates) ? m.excludedSeedDates.slice() : [];
+          const curExclCnt = excl.filter(d => d === existing.date).length;
+          if (curExclCnt < maxSeedOcc) {
+            excl.push(existing.date);
+            m.excludedSeedDates = excl;
+            memberChanged = true;
+          }
+        }
+        if (Array.isArray(m.pastDates)) {
+          const calcLast = m.pastDates.filter(d => !isUnknownDate(d)).sort().pop() || null;
+          if ((m.baseLastDate || null) !== calcLast) {
+            m.baseLastDate = calcLast;
+            memberChanged = true;
+          }
+        }
+        if (memberChanged) {
+          await DB.put('members', m);
+          updatedMember = m;
+        }
+      }
+    }
+
     if (syncServer && typeof Backend !== 'undefined') {
       if (!Backend.sessionBackendPw) {
         const s = await this.settings();
         Backend.sessionBackendPw = s.password || CONFIG.defaultPassword || '0113';
       }
       await Backend.enqueue('deleteAttendance', { id });
+      if (updatedMember) {
+        await Backend.enqueue('upsertMember', { member: updatedMember });
+      }
     }
+  },
+
+  /** 사진촬영 전(pastDates) 출석 기록 1건 삭제 → 전체 횟수 및 1~24/25~48/49~72/73~96 회차 즉시 재계산 */
+  async deletePastDate(memberId, pastIndex, expectedDate = null, syncServer = true) {
+    const m = await DB.get('members', memberId);
+    if (!m) return null;
+    const base = m.baseCount || 0;
+    let past = Array.isArray(m.pastDates) ? m.pastDates.slice() : [];
+    if (past.length > base) past = past.slice(0, base);
+
+    let removedDate = null;
+    if (pastIndex < 0) {
+      if (base <= 0) return m;
+      m.baseCount = Math.max(0, base - 1);
+      removedDate = UNKNOWN_DATE;
+    } else if (pastIndex >= 0 && pastIndex < past.length) {
+      let idx = pastIndex;
+      if (expectedDate && past[idx] !== expectedDate) {
+        const found = past.lastIndexOf(expectedDate);
+        if (found >= 0) idx = found;
+      }
+      removedDate = past[idx];
+      past.splice(idx, 1);
+      m.pastDates = past;
+      m.baseCount = Math.max(0, base - 1);
+    } else {
+      return m;
+    }
+
+    m.baseLastDate = (m.pastDates || []).filter(d => !isUnknownDate(d)).sort().pop() || null;
+    m.pastDatesEdited = true;
+    if (removedDate) {
+      const excl = Array.isArray(m.excludedSeedDates) ? m.excludedSeedDates.slice() : [];
+      excl.push(removedDate);
+      m.excludedSeedDates = excl;
+    }
+
+    await DB.put('members', m);
+    if (syncServer && typeof Backend !== 'undefined') {
+      if (!Backend.sessionBackendPw) {
+        const s = await this.settings();
+        Backend.sessionBackendPw = s.password || CONFIG.defaultPassword || '0113';
+      }
+      await Backend.enqueue('upsertMember', { member: m });
+    }
+    return m;
   },
 
   /* ---------- 경고 [경고-확인필요] ---------- */
@@ -487,16 +589,23 @@ const Store = {
   },
 
   /* ---------- 출석 타임라인 (사진촬영 전 출석일 + 앱 기록) ---------- */
-  /** 1회째부터 순서대로 [{date, unknown, att?}] — 도입 전 날짜는 m.pastDates, 이후는 앱 출석 기록 */
+  /** 1회째부터 순서대로 [{date, unknown, isPast, pastIndex?, att?}] — 도입 전 날짜는 m.pastDates, 이후는 앱 출석 기록 */
   timeline(m, atts) {
     const base = m.baseCount || 0;
     let past = Array.isArray(m.pastDates) ? m.pastDates.slice() : [];
     if (past.length > base) past = past.slice(0, base);
-    while (past.length < base) past.unshift(UNKNOWN_DATE);
+    const padCount = Math.max(0, base - past.length);
+    const pastEntries = [];
+    for (let i = 0; i < padCount; i++) {
+      pastEntries.push({ date: UNKNOWN_DATE, unknown: true, isPast: true, pastIndex: -1 - i });
+    }
+    past.forEach((d, idx) => {
+      pastEntries.push({ date: d, unknown: isUnknownDate(d), isPast: true, pastIndex: idx });
+    });
     const list = (atts || m.atts || []).slice().sort((a, b) => a.ts - b.ts);
     return [
-      ...past.map(d => ({ date: d, unknown: isUnknownDate(d) })),
-      ...list.map(a => ({ date: a.date, unknown: false, att: a })),
+      ...pastEntries,
+      ...list.map(a => ({ date: a.date, unknown: false, isPast: false, att: a })),
     ];
   },
 
@@ -526,7 +635,8 @@ const Store = {
       }
       m.pastDates = pastDates;
       m.baseCount = pastDates.length;
-      const lastKnown = pastDates.filter(d => !isUnknownDate(d)).pop() || null;
+      m.pastDatesEdited = true;
+      const lastKnown = pastDates.filter(d => !isUnknownDate(d)).sort().pop() || null;
       if (lastKnown || m.baseCount === 0) m.baseLastDate = lastKnown;
       await DB.put('members', m);
       changed.push(m);
@@ -568,7 +678,9 @@ const Store = {
 
     const hasEmptyPast = ms.some(m => {
       const seed = seedByUN[`${m.unit}|${m.name}`];
-      return seed && seed.dates.length > 0 && (!Array.isArray(m.pastDates) || m.pastDates.length === 0);
+      return seed && seed.dates.length > 0 && !m.pastDatesEdited
+        && !(Array.isArray(m.excludedSeedDates) && m.excludedSeedDates.length > 0)
+        && (!Array.isArray(m.pastDates) || m.pastDates.length === 0);
     });
     if (!force && ms.length > 0 && settings.historySeedRev === HISTORY_SEED_REV
       && settings.sysAttSeededRev === SYS_ATT_SEED_REV && !hasEmptyPast) {
@@ -653,12 +765,13 @@ const Store = {
     const grantsByMember = {};
     allGrants.forEach(g => (grantsByMember[g.memberId] = grantsByMember[g.memberId] || []).push(g));
 
-    // 11.11(수) / 11.15(일) 시스템 출석 기록 누락분 자동 채움 (이미 해당 일자 사진/출석이 있으면 그대로 유지)
+    // 11.11(수) / 11.15(일) 시스템 출석 기록 누락분 자동 채움 (이미 해당 일자 사진/출석이 있거나 사용자가 명시적으로 삭제한 날짜는 유지)
     if (sysAtts.length && (isFreshDb || settings.sysAttSeededRev !== SYS_ATT_SEED_REV)) {
       const mByUN = Object.fromEntries(ms.map(m => [`${m.unit}|${m.name}`, m]));
       for (const sa of sysAtts) {
         const m = mByUN[`${sa.unit}|${sa.name}`];
         if (!m) continue;
+        if (Array.isArray(m.excludedSeedDates) && m.excludedSeedDates.includes(sa.date)) continue;
         const mAtts = attByMember[m.id] || [];
         if (mAtts.some(a => a.date === sa.date)) continue;
         const ts = new Date(`${sa.date}T${sa.time || '11:00'}:00+09:00`).getTime();
@@ -684,6 +797,7 @@ const Store = {
     }
 
     let updated = 0;
+    const membersToSyncServer = [];
     const today = todayStr();
     // 미래 연도 오기재(예: 2025→2026), 기준일>건의일 뒤바뀜, 이전 차수가 이후 차수보다 늦은 오기재 감지
     const isCorruptedLegacySlot = (sl, allSlots) => {
@@ -708,11 +822,12 @@ const Store = {
         if (dHit.length === 1) {
           const d = dHit[0];
           let dChanged = false;
-          if (!Array.isArray(d.pastDates) || !d.pastDates.length) {
-            const nextPast = dedupePastDates(seed.dates, d.attendances);
+          if (!d.pastDatesEdited && (!Array.isArray(d.pastDates) || !d.pastDates.length)) {
+            const effSeed = applyExcludedDates(seed.dates, d.excludedSeedDates);
+            const nextPast = dedupePastDates(effSeed, d.attendances);
             d.pastDates = nextPast;
             d.baseCount = nextPast.length;
-            d.baseLastDate = nextPast.filter(dt => !isUnknownDate(dt)).pop() || null;
+            d.baseLastDate = nextPast.filter(dt => !isUnknownDate(dt)).sort().pop() || null;
             dChanged = true;
           }
           const dCurSlots = this.getMemberSlots(d, d.mileage || []);
@@ -770,9 +885,15 @@ const Store = {
       const ex = hit[0];
       const mAtts = attByMember[ex.id] || [];
       const mGrants = grantsByMember[ex.id] || [];
-      const nextPast = dedupePastDates(seed.dates, mAtts);
-      const nextBaseCount = nextPast.length;
-      const nextLastDate = nextPast.filter(d => !isUnknownDate(d)).pop() || null;
+      const isManualPast = !!ex.pastDatesEdited;
+      const effectiveSeedDates = applyExcludedDates(seed.dates, ex.excludedSeedDates);
+      const nextPast = isManualPast
+        ? (Array.isArray(ex.pastDates) ? ex.pastDates.slice() : [])
+        : dedupePastDates(effectiveSeedDates, mAtts);
+      const nextBaseCount = isManualPast ? (ex.baseCount || 0) : nextPast.length;
+      const nextLastDate = isManualPast
+        ? (ex.baseLastDate !== undefined ? ex.baseLastDate : (nextPast.filter(d => !isUnknownDate(d)).sort().pop() || null))
+        : (nextPast.filter(d => !isUnknownDate(d)).sort().pop() || null);
       const totalAfter = nextBaseCount + mAtts.length;
 
       const curSlots = this.getMemberSlots(ex, mGrants);
@@ -812,7 +933,7 @@ const Store = {
             proposedDate: safeProp,
             memo: sl.memo || (inc && inc.memo) || '',
           };
-        }).filter(sl => (seed.overrideSlots && !isPostSeedSlot(sl)) ? totalAfter >= sl.count : true)
+        }).filter(sl => (seed.overrideSlots && !isPostSeedSlot(sl) && !sl.proposedDate) ? totalAfter >= sl.count : true)
       );
       const prevNormSlots = this.normalizeSlots(ex.mileageSlots || []);
       const prevEffective = this.normalizeSlots(curSlots);
@@ -838,10 +959,19 @@ const Store = {
         if (effectiveChanged || hadCorruptedFix) {
           await this.syncGrantsWithSlots(ex, mergedSlots, hadCorruptedFix);
         }
-        if (hadCorruptedFix && typeof Backend !== 'undefined') {
-          await Backend.enqueue('upsertMember', { member: ex });
+        // 기존 DB(서버 연동 상태)에서 오기재 슬롯 치유 또는 시드 과거 출석일 교정(예: 손한규 11.10 제거)이 일어나면 서버에도 1회 반영
+        if (!isFreshDb && (hadCorruptedFix || pastChanged || baseChanged)) {
+          membersToSyncServer.push(ex);
         }
         updated++;
+      }
+    }
+
+    if (!isFreshDb && membersToSyncServer.length && typeof Backend !== 'undefined') {
+      if (membersToSyncServer.length === 1) {
+        await Backend.enqueue('upsertMember', { member: membersToSyncServer[0] });
+      } else {
+        await Backend.enqueue('upsertMembersBatch', { members: membersToSyncServer });
       }
     }
 
@@ -860,15 +990,16 @@ const Store = {
     const U = CONFIG.mileageUnit;
     const atts = (m.atts || []).slice().sort((a, b) => a.ts - b.ts);
     const baseCount = m.baseCount || 0;
+    const tl = this.timeline(m, atts);
     const rawSlots = Array.isArray(m.mileageSlots) ? m.mileageSlots : [];
     const byStage = {};
     for (let s = 1; s <= 5; s++) {
       const targetCount = s * U;
       let achievedDate = '';
       if (baseCount + atts.length >= targetCount) {
-        const idxInAtts = targetCount - baseCount - 1;
-        if (idxInAtts >= 0 && atts[idxInAtts]) {
-          achievedDate = atts[idxInAtts].date;
+        const entry = tl[targetCount - 1];
+        if (entry && entry.date && !isUnknownDate(entry.date)) {
+          achievedDate = entry.date;
         } else if (m.baseLastDate) {
           achievedDate = m.baseLastDate;
         } else if (atts.length) {
