@@ -1575,11 +1575,15 @@ const Admin = {
     });
   },
 
-  /* ===================== 마일리지 (미건의 대상자 즉시 조치 + 1~5차 기준일·건의일 관리) ===================== */
+  /* ===================== 마일리지 (미건의 대상자 즉시 조치 + 최근 신청 내역 + 1~5차 기준일·건의일 관리) ===================== */
   async tab_mileage(body) {
     const U = CONFIG.mileageUnit;
     const today = todayStr();
-    const [ms, grants] = await Promise.all([Store.membersWithStats(), Store.allGrants()]);
+    const [ms, grants, allPeople] = await Promise.all([
+      Store.membersWithStats(),
+      Store.allGrants(),
+      Store.allPeopleFull(),
+    ]);
     const G = {};
     grants.forEach(g => (G[g.memberId] = G[g.memberId] || []).push(g));
 
@@ -1593,6 +1597,34 @@ const Admin = {
       const pending = pendingSlots.length;
       return { m, slots, upTo, earned, granted, pending, pendingSlots };
     }).sort((a, b) => b.pending - a.pending || unitOrder(unitLabel(a.m)) - unitOrder(unitLabel(b.m)) || koSort(a.m, b.m));
+
+    // 최근 마일리지 신청(건의) 내역 전체 수집 (현역 + 전역자 포함, 최신 건의일순 정렬)
+    const proposalLogs = [];
+    allPeople.forEach(p => {
+      const pGrants = p.discharged ? (p.grants || []) : (G[p.id] || p.grants || []);
+      const slots = Store.getMemberSlots(p, pGrants);
+      slots.forEach(sl => {
+        if (sl.proposedDate) {
+          proposalLogs.push({
+            person: p,
+            unitStr: `${p.unit}|${p.company || ''}`,
+            unitLabel: unitLabel(p),
+            stage: sl.stage,
+            count: sl.count,
+            baseDate: sl.baseDate || sl.achievedDate || '',
+            proposedDate: sl.proposedDate,
+            discharged: !!p.discharged,
+          });
+        }
+      });
+    });
+    proposalLogs.sort((a, b) =>
+      b.proposedDate.localeCompare(a.proposedDate) ||
+      unitOrder(a.unitLabel) - unitOrder(b.unitLabel) ||
+      koSort(a.person, b.person) ||
+      b.stage - a.stage
+    );
+    const uniquePropDates = [...new Set(proposalLogs.map(x => x.proposedDate))];
 
     // 미건의 항목(용사별 미건의 차수) 추출
     const pendingItems = [];
@@ -1610,8 +1642,17 @@ const Admin = {
       });
     });
 
+    if (!this.milViewMode) this.milViewMode = 'all';
+    if (!this.milRecentPeriod) this.milRecentPeriod = 'all';
+
+    // 최근 신청일 상위 5개 요약 배지
+    const recentDateSummaries = uniquePropDates.slice(0, 5).map(d => ({
+      date: d,
+      count: proposalLogs.filter(x => x.proposedDate === d).length,
+    }));
+
     body.innerHTML = `
-      <div class="card" style="border:2px solid ${pendingItems.length ? '#dc2626' : '#16a34a'};background:${pendingItems.length ? '#fff5f5' : '#f0fdf4'};margin-bottom:1.1rem">
+      <div class="card" style="border:2px solid ${pendingItems.length ? '#dc2626' : '#16a34a'};background:${pendingItems.length ? '#fff5f5' : '#f0fdf4'};margin-bottom:.85rem">
         <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:.5rem;margin-bottom:.6rem">
           <h3 style="margin:0;color:${pendingItems.length ? '#b91c1c' : '#166534'}">
             ${pendingItems.length
@@ -1664,21 +1705,87 @@ const Admin = {
         ` : ''}
       </div>
 
-      <div class="note">
-        예배 <b>${U}회</b> 달성마다 마일리지(1~5차: 24회·48회·72회·96회·120회) <b>기준일(언제부)</b>과 <b>건의일(언제 건의신청)</b>을 기록·관리합니다.<br>
-        날짜는 <code>26.02.01</code> 형식으로 표시되며, 표 우측의 <b>[건의 입력/수정]</b>을 눌러 언제든 모든 차수의 날짜를 수정할 수 있습니다.
+      ${recentDateSummaries.length ? `
+        <div class="mil-recent-strip">
+          <div style="display:flex;align-items:center;flex-wrap:wrap;gap:.4rem">
+            <b style="color:#1e3a8a;font-size:.86rem">📅 최근 신청일 바로가기:</b>
+            ${recentDateSummaries.map(s => `
+              <button type="button" class="td-unit-chip" data-mil-quick-date="${esc(s.date)}">${fmtYYMMDD(s.date)}(${weekdayOf(s.date)}) <b>${s.count}명</b></button>
+            `).join('')}
+          </div>
+          <button type="button" class="btn small primary" id="mil-go-recent" style="background:#1e3a8a">📅 최근 신청 내역 전체 보기 (${proposalLogs.length}건)</button>
+        </div>` : ''}
+
+      <div class="mil-subtabs">
+        <button type="button" class="mil-subtab ${this.milViewMode === 'all' ? 'on' : ''}" data-mil-view="all">📋 전체 인원 마일리지 현황표 (${allRows.length}명)</button>
+        <button type="button" class="mil-subtab ${this.milViewMode === 'recent' ? 'on' : ''}" data-mil-view="recent">📅 최근 마일리지 신청(건의) 내역 (${proposalLogs.length}건 · 최신순)</button>
       </div>
-      <div class="toolbar">
-        ${this.unitSelect('mil-unit', true, this.milUnit || '')}
-        <input id="mil-q" placeholder="이름 검색" value="${esc(this.milQ || '')}" style="max-width:160px">
-        <label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미건의 대상자만 보기</label>
-        <label><input type="checkbox" id="only-earned" ${this.onlyEarned ? 'checked' : ''}> 24회 이상자만 보기</label>
-        <button class="btn ghost small" id="mil-xl">📊 마일리지 표 엑셀 다운로드</button>
-        <button class="btn primary small" id="mil-export-all" style="background:#1e3a8a">📤 전체 출석기록 엑셀 전송</button>
+
+      <div id="mil-panel-all" style="display:${this.milViewMode === 'all' ? 'block' : 'none'}">
+        <div class="note">
+          예배 <b>${U}회</b> 달성마다 마일리지(1~5차: 24회·48회·72회·96회·120회) <b>기준일(언제부)</b>과 <b>건의일(언제 건의신청)</b>을 기록·관리합니다.<br>
+          날짜는 <code>26.02.01</code> 형식으로 표시되며, 표 우측의 <b>[건의 입력/수정]</b>을 눌러 언제든 모든 차수의 날짜를 수정할 수 있습니다.
+        </div>
+        <div class="toolbar">
+          ${this.unitSelect('mil-unit', true, this.milUnit || '')}
+          <input id="mil-q" placeholder="이름 검색" value="${esc(this.milQ || '')}" style="max-width:160px">
+          <label><input type="checkbox" id="only-pending" ${this.onlyPending ? 'checked' : ''}> 미건의 대상자만 보기</label>
+          <label><input type="checkbox" id="only-earned" ${this.onlyEarned ? 'checked' : ''}> 24회 이상자만 보기</label>
+          <button class="btn ghost small" id="mil-xl">📊 마일리지 표 엑셀 다운로드</button>
+          <button class="btn primary small" id="mil-export-all" style="background:#1e3a8a">📤 전체 출석기록 엑셀 전송</button>
+        </div>
+        <div id="mil-table-wrap"></div>
       </div>
-      <div id="mil-table-wrap"></div>`;
+
+      <div id="mil-panel-recent" style="display:${this.milViewMode === 'recent' ? 'block' : 'none'}">
+        <div class="note">
+          마일리지를 부대에 <b>언제 누구누구 것을 건의(신청)했는지 최신 건의일순으로 정렬</b>해 보여줍니다. (전역자 기록 포함)<br>
+          형제 이름을 누르면 해당 회차(24회 구간) 출석 이력을 바로 확인할 수 있습니다.
+        </div>
+        <div class="toolbar" style="gap:.5rem">
+          <button type="button" class="td-unit-chip ${this.milRecentPeriod === 'all' ? 'on' : ''}" data-rec-period="all">전체 기간</button>
+          <button type="button" class="td-unit-chip ${this.milRecentPeriod === '30d' ? 'on' : ''}" data-rec-period="30d">최근 30일</button>
+          <button type="button" class="td-unit-chip ${this.milRecentPeriod === '90d' ? 'on' : ''}" data-rec-period="90d">최근 3개월</button>
+          <select id="mil-rec-date" title="특정 건의일 선택">
+            <option value="">전체 건의일 (${uniquePropDates.length}일)</option>
+            ${uniquePropDates.map(d => {
+              const cnt = proposalLogs.filter(x => x.proposedDate === d).length;
+              return `<option value="${esc(d)}" ${this.milRecDate === d ? 'selected' : ''}>${d} (${weekdayOf(d)}) · ${cnt}명</option>`;
+            }).join('')}
+          </select>
+          ${this.unitSelect('mil-rec-unit', true, this.milRecUnit || '')}
+          <input id="mil-rec-q" placeholder="이름 검색" value="${esc(this.milRecQ || '')}" style="max-width:150px">
+          <button type="button" class="btn ghost small" id="mil-rec-xl">📊 신청 내역 엑셀 다운로드</button>
+        </div>
+        <div id="mil-recent-wrap"></div>
+      </div>`;
 
     this.bindMemberHistoryLinks(body);
+
+    const switchView = mode => {
+      this.milViewMode = mode;
+      $$('[data-mil-view]', body).forEach(b => b.classList.toggle('on', b.dataset.milView === mode));
+      $('#mil-panel-all', body).style.display = mode === 'all' ? 'block' : 'none';
+      $('#mil-panel-recent', body).style.display = mode === 'recent' ? 'block' : 'none';
+      if (mode === 'recent') drawRecent();
+    };
+
+    $$('[data-mil-view]', body).forEach(b => b.onclick = () => switchView(b.dataset.milView));
+    if ($('#mil-go-recent', body)) {
+      $('#mil-go-recent', body).onclick = () => {
+        this.milRecDate = '';
+        if ($('#mil-rec-date')) $('#mil-rec-date').value = '';
+        this.milRecentPeriod = 'all';
+        switchView('recent');
+      };
+    }
+    $$('[data-mil-quick-date]', body).forEach(b => b.onclick = () => {
+      this.milRecDate = b.dataset.milQuickDate;
+      this.milRecentPeriod = 'all';
+      if ($('#mil-rec-date')) $('#mil-rec-date').value = this.milRecDate;
+      switchView('recent');
+    });
+
     // 미건의 대상자 행의 날짜 변경 시 YY.MM.DD 실시간 미리보기 업데이트
     $$('.pend-item-row', body).forEach(row => {
       const bIn = $('.pend-base', row);
@@ -1753,6 +1860,116 @@ const Admin = {
         this.render();
       };
     }
+
+    let curRecentFiltered = [];
+    const drawRecent = () => {
+      this.milRecDate = $('#mil-rec-date').value;
+      this.milRecUnit = $('#mil-rec-unit').value;
+      this.milRecQ = $('#mil-rec-q').value.trim();
+
+      $$('[data-rec-period]', body).forEach(b => b.classList.toggle('on', b.dataset.recPeriod === this.milRecentPeriod));
+
+      let minDateStr = '';
+      if (this.milRecentPeriod === '30d') {
+        const d = new Date(); d.setDate(d.getDate() - 30); minDateStr = fmtDate(d);
+      } else if (this.milRecentPeriod === '90d') {
+        const d = new Date(); d.setDate(d.getDate() - 90); minDateStr = fmtDate(d);
+      }
+
+      curRecentFiltered = proposalLogs.filter(x => {
+        if (this.milRecDate && x.proposedDate !== this.milRecDate) return false;
+        if (!this.milRecDate && minDateStr && x.proposedDate < minDateStr) return false;
+        if (this.milRecUnit && x.unitStr !== this.milRecUnit) return false;
+        if (this.milRecQ && !x.person.name.includes(this.milRecQ)) return false;
+        return true;
+      });
+
+      const datesInView = [...new Set(curRecentFiltered.map(x => x.proposedDate))];
+      $('#mil-recent-wrap').innerHTML = curRecentFiltered.length ? `
+        <p class="muted" style="margin:.25rem 0 .6rem">
+          총 <b>${curRecentFiltered.length}건</b> (${datesInView.length}개 신청일 · 최신 건의일순 정렬)
+          ${this.milRecDate ? `<button type="button" class="btn ghost small" id="mil-rec-clr-date" style="margin-left:.4rem;padding:.15em .55em">✕ 날짜 필터 해제</button>` : ''}
+        </p>
+        ${datesInView.map(d => {
+          const dayItems = curRecentFiltered.filter(x => x.proposedDate === d);
+          return `
+            <div class="mil-date-group" data-prop-date="${esc(d)}">
+              <div class="mil-date-group-head">
+                <span>📅 ${d} (${weekdayOf(d)}) 신청(건의) — ${dayItems.length}명</span>
+                <span class="muted" style="font-size:.78rem;font-weight:600">${dayItems.map(x => `${x.unitLabel} ${x.person.name}(${x.count}회)`).join(' · ')}</span>
+              </div>
+              <div class="tbl-wrap">
+                <table class="tbl">
+                  <thead>
+                    <tr>
+                      <th>연번</th><th>소속부대</th><th>이름</th><th>신청 차수</th><th>언제부(기준일)</th><th>건의일</th><th>누적출석</th><th>전역일</th><th>관리</th>
+                    </tr>
+                  </thead>
+                  <tbody>
+                    ${dayItems.map((x, idx) => `
+                      <tr>
+                        <td>${idx + 1}</td>
+                        <td>${esc(x.unitLabel)}</td>
+                        <td>${this.memberLink(x.person.id, x.person.name, x.stage)}${x.discharged ? ' <span class="badge gray">전역</span>' : ''}</td>
+                        <td><span class="badge" style="background:var(--navy);margin:0">${x.stage}차 (${x.count}회)</span></td>
+                        <td><b>${fmtYYMMDD(x.baseDate) || '-'}</b>부</td>
+                        <td><b style="color:#166534">${fmtYYMMDD(x.proposedDate)}</b></td>
+                        <td>${x.person.total}회</td>
+                        <td>${fmtYYMMDD(x.person.dischargeDate)}</td>
+                        <td>${x.discharged ? '<span class="muted">전역</span>' : `<button type="button" class="btn small ghost" data-rec-grant="${x.person.id}">수정</button>`}</td>
+                      </tr>
+                    `).join('')}
+                  </tbody>
+                </table>
+              </div>
+            </div>`;
+        }).join('')}` : `
+        <div class="card"><p class="muted" style="text-align:center;padding:1.5rem 0">해당 조건의 마일리지 신청(건의) 내역이 없습니다.</p></div>`;
+
+      this.bindMemberHistoryLinks($('#mil-recent-wrap'));
+      if ($('#mil-rec-clr-date')) {
+        $('#mil-rec-clr-date').onclick = () => {
+          this.milRecDate = '';
+          $('#mil-rec-date').value = '';
+          drawRecent();
+        };
+      }
+      $$('[data-rec-grant]', $('#mil-recent-wrap')).forEach(b => b.onclick = () => {
+        const r = allRows.find(x => String(x.m.id) === String(b.dataset.recGrant));
+        if (r) this.openMileageModal(r);
+      });
+    };
+
+    $$('[data-rec-period]', body).forEach(b => b.onclick = () => {
+      this.milRecentPeriod = b.dataset.recPeriod;
+      this.milRecDate = '';
+      $('#mil-rec-date').value = '';
+      drawRecent();
+    });
+    $('#mil-rec-date').onchange = () => { this.milRecentPeriod = 'all'; drawRecent(); };
+    $('#mil-rec-unit').onchange = drawRecent;
+    $('#mil-rec-q').oninput = drawRecent;
+    $('#mil-rec-xl').onclick = () => {
+      if (typeof XLSX === 'undefined') return Modal.alert('엑셀 도구를 불러오지 못했습니다.');
+      const aoa = [['연번', '건의일(신청일)', '요일', '소속부대', '이름', '상태', '신청차수', '언제부(기준일)', '누적출석', '전역일']];
+      curRecentFiltered.forEach((x, idx) => {
+        aoa.push([
+          idx + 1,
+          x.proposedDate,
+          weekdayOf(x.proposedDate),
+          x.unitLabel,
+          x.person.name,
+          x.discharged ? '전역' : '현역',
+          `${x.stage}차 (${x.count}회)`,
+          fmtYYMMDD(x.baseDate),
+          x.person.total,
+          fmtYYMMDD(x.person.dischargeDate),
+        ]);
+      });
+      const wb = XLSX.utils.book_new();
+      XLSX.utils.book_append_sheet(wb, XLSX.utils.aoa_to_sheet(aoa), '최근_마일리지_신청내역');
+      XLSX.writeFile(wb, `천군교회_마일리지_신청내역_${today}.xlsx`);
+    };
 
     const drawTable = () => {
       this.milUnit = $('#mil-unit').value;
@@ -1832,6 +2049,7 @@ const Admin = {
     $('#mil-xl').onclick = () => this.exportExcel();
     $('#mil-export-all').onclick = () => this.open('export');
     drawTable();
+    drawRecent();
   },
 
   openMileageModal(r) {
