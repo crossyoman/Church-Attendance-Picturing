@@ -714,10 +714,12 @@ const Store = {
       const totalAfter = nextBaseCount + mAtts.length;
 
       const curSlots = this.getMemberSlots(ex, mGrants);
+      const isPostSeedSlot = sl => (sl.proposedDate && sl.proposedDate > '2026-11-15') || (sl.baseDate && sl.baseDate > '2026-11-15');
       const mergedSlots = this.normalizeSlots(
         curSlots.map(sl => {
           const inc = seedSlots.find(x => +x.stage === sl.stage);
-          if (seed.overrideSlots) {
+          // 2026-11-15 이후(시드 기준일 이후)에 새로 입력·건의된 마일리지는 overrideSlots라도 절대 지우지 않고 보존
+          if (seed.overrideSlots && !isPostSeedSlot(sl)) {
             return {
               stage: sl.stage,
               count: sl.count,
@@ -736,7 +738,7 @@ const Store = {
             proposedDate: safeProp,
             memo: sl.memo || (inc && inc.memo) || '',
           };
-        }).filter(sl => seed.overrideSlots ? totalAfter >= sl.count : true)
+        }).filter(sl => (seed.overrideSlots && !isPostSeedSlot(sl)) ? totalAfter >= sl.count : true)
       );
       const prevNormSlots = this.normalizeSlots(ex.mileageSlots || []);
       const prevEffective = this.normalizeSlots(curSlots);

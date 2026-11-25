@@ -68,6 +68,10 @@ const Admin = {
     if (syncBtn) syncBtn.onclick = async () => {
       syncBtn.disabled = true; syncBtn.textContent = '동기화 중…';
       await Backend.syncFromServerIfChanged(true);
+      const rem = await Backend.pendingCount();
+      if (rem > 0) {
+        await Modal.alert(`아직 서버로 전송되지 못한 작업이 <b>${rem}건</b> 남아 있어 로컬 기록을 보호했습니다.<br><span class="muted">${esc(Backend.lastError || '인터넷 연결 또는 설정 탭의 서버 연결 상태를 확인해 주세요.')}</span>`, '서버 동기화 확인');
+      }
       this.render();
     };
     $$('.tabs button').forEach(b => b.onclick = () => this.open(b.dataset.tab));

@@ -156,77 +156,92 @@ const Backend = {
     return all.length;
   },
 
-  /** 대기 중인 동기화 큐를 순서대로 서버에 전송 */
+  /** 대기 중인 동기화 큐를 순서대로 서버에 전송 (진행 중이면 완료까지 대기 + 도중 추가된 항목까지 모두 소진) */
   async flush() {
-    if (this.flushing) return;
+    if (this._flushPromise) return this._flushPromise;
     if (typeof navigator !== 'undefined' && navigator.onLine === false) return;
     if (!(await this.isConfigured())) return;
 
     this.flushing = true;
-    try {
-      const queue = (await DB.all('syncQueue')).sort((a, b) => a.createdAt - b.createdAt);
-      for (const item of queue) {
-        if (item.needsAuth && !this.sessionBackendPw) continue;
-        try {
-          const payload = { ...item.payload };
+    this._flushPromise = (async () => {
+      try {
+        while (true) {
+          const queue = (await DB.all('syncQueue'))
+            .filter(item => !(item.needsAuth && !this.sessionBackendPw))
+            .sort((a, b) => a.createdAt - b.createdAt);
+          if (!queue.length) break;
 
-          if (item.action === 'recordAttendance' || item.action === 'replacePhoto') {
-            const attId = payload.attendance && payload.attendance.id;
-            const latestAtt = attId ? await DB.get('attendance', attId) : null;
-            if (!latestAtt && item.action === 'recordAttendance') {
+          let progressed = false;
+          let hitError = false;
+          for (const item of queue) {
+            try {
+              const payload = { ...item.payload };
+
+              if (item.action === 'recordAttendance' || item.action === 'replacePhoto') {
+                const attId = payload.attendance && payload.attendance.id;
+                const latestAtt = attId ? await DB.get('attendance', attId) : null;
+                if (!latestAtt && item.action === 'recordAttendance') {
+                  await DB.del('syncQueue', item.id);
+                  progressed = true;
+                  continue;
+                }
+                if (latestAtt) payload.attendance = latestAtt;
+                if (attId && !payload.photoDataUrl) {
+                  const blob = await DB.get('photos', attId);
+                  if (blob) payload.photoDataUrl = await this.blobToDataURL(blob);
+                }
+              }
+
+              if (item.action === 'addWarning' && payload.warning) {
+                const photos = {};
+                for (const attId of payload.warning.attendanceIds || []) {
+                  const blob = await DB.get('photos', attId);
+                  if (blob) photos[attId] = await this.blobToDataURL(blob);
+                }
+                payload.photos = photos;
+              }
+
+              const pw = this.sessionBackendPw || item.backendPassword || '';
+              const res = await this.call(item.action, payload, null, pw);
+
+              if (item.action === 'addWarning' && res.emailSent && payload.warning) {
+                const w = await DB.get('warnings', payload.warning.id);
+                if (w) {
+                  w.emailSent = true;
+                  w.emailSentAt = Date.now();
+                  await DB.put('warnings', w);
+                }
+              }
+
+              if (res.syncRev) {
+                const s = await DB.get('settings', 'main') || {};
+                s.lastSyncRev = res.syncRev;
+                await DB.put('settings', s, 'main');
+              }
+
               await DB.del('syncQueue', item.id);
-              continue;
-            }
-            if (latestAtt) payload.attendance = latestAtt;
-            if (attId && !payload.photoDataUrl) {
-              const blob = await DB.get('photos', attId);
-              if (blob) payload.photoDataUrl = await this.blobToDataURL(blob);
-            }
-          }
-
-          if (item.action === 'addWarning' && payload.warning) {
-            const photos = {};
-            for (const attId of payload.warning.attendanceIds || []) {
-              const blob = await DB.get('photos', attId);
-              if (blob) photos[attId] = await this.blobToDataURL(blob);
-            }
-            payload.photos = photos;
-          }
-
-          const pw = this.sessionBackendPw || item.backendPassword || '';
-          const res = await this.call(item.action, payload, null, pw);
-
-          if (item.action === 'addWarning' && res.emailSent && payload.warning) {
-            const w = await DB.get('warnings', payload.warning.id);
-            if (w) {
-              w.emailSent = true;
-              w.emailSentAt = Date.now();
-              await DB.put('warnings', w);
+              progressed = true;
+            } catch (err) {
+              this.lastError = err.message || String(err);
+              console.warn('[Backend sync failed]', item.action, this.lastError);
+              // 비밀번호 문제로 실패한 작업은 큐를 막지 않도록 건너뛰고, 다음에 목사님이 인증하면 재시도
+              if (this.lastError.includes('백엔드 비밀번호')) {
+                item.needsAuth = true;
+                await DB.put('syncQueue', item);
+                continue;
+              }
+              hitError = true;
+              break;
             }
           }
-
-          if (res.syncRev) {
-            const s = await DB.get('settings', 'main') || {};
-            s.lastSyncRev = res.syncRev;
-            await DB.put('settings', s, 'main');
-          }
-
-          await DB.del('syncQueue', item.id);
-        } catch (err) {
-          this.lastError = err.message || String(err);
-          console.warn('[Backend sync failed]', item.action, this.lastError);
-          // 비밀번호 문제로 실패한 작업은 큐를 막지 않도록 건너뛰고, 다음에 목사님이 인증하면 재시도
-          if (this.lastError.includes('백엔드 비밀번호')) {
-            item.needsAuth = true;
-            await DB.put('syncQueue', item);
-            continue;
-          }
-          break;
+          if (hitError || !progressed) break;
         }
+      } finally {
+        this.flushing = false;
+        this._flushPromise = null;
       }
-    } finally {
-      this.flushing = false;
-    }
+    })();
+    return this._flushPromise;
   },
 
   /**
@@ -242,7 +257,12 @@ const Backend = {
     try {
       await this.flush();
       const allQueue = await DB.all('syncQueue');
-      if (allQueue.length > 0 && !force) return false; // 아직 업로드 못한 로컬 작업(삭제 포함)이 있으면 덮어쓰기 방지
+      // 아직 서버에 전송되지 못한 로컬 변경사항이 남아 있으면(네트워크/인증 오류 등)
+      // 설령 force 동기화라도 로컬 데이터를 서버 구버전으로 덮어써서 유실시키지 않음!
+      if (allQueue.length > 0) {
+        this.lastError = this.lastError || `서버 전송 대기 중인 변경사항 ${allQueue.length}건이 있어 덮어쓰기를 보류했습니다.`;
+        return false;
+      }
 
       // 큐에 대기 중인 삭제 작업 목록(설령 force 동기화라도 로컬에서 삭제한 항목이 다시 살아나지 않도록 보호)
       const pendingDeletedMemberIds = new Set(
